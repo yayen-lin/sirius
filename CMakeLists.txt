@@ -195,7 +195,10 @@ set(EXTENSION_SOURCES
     src/sirius_extension.cpp
     src/sirius_interface.cpp
     src/util/stream_check_wrapper.cpp
-    src/util/segfault_backtrace_handler.cpp)
+    src/util/segfault_backtrace_handler.cpp
+    src/graph/GraphQueryLexer.cpp
+    src/graph/GraphQueryParser.cpp
+)
 
 set(CUDA_SOURCES
     src/cuda/allocator.cu
