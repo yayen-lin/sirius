@@ -47,6 +47,9 @@ extern "C" int cudaProfilerStop();
 #include "sirius_extension.hpp"
 #include "sirius_interface.hpp"
 #include "util/segfault_backtrace.hpp"
+#include "graph/GraphQueryParser.hpp"
+#include "graph/GPUCSRConstructionOperator.hpp"
+#include "graph/GPUGraphTraversalOperator.hpp"
 
 #include <cstdlib>
 
@@ -226,6 +229,18 @@ struct SiriusTableFunctionData : public TableFunctionData {
   }
 };
 
+struct GPUGraphFunctionData : public TableFunctionData {
+  GPUGraphFunctionData() = default;
+  string query;
+  ParsedGraphQuery parsed;
+  bool finished = false;
+  unique_ptr<Connection> conn;
+  unique_ptr<GPUContext> gpu_context;
+  unique_ptr<QueryResult> res;
+  bool plan_built = false;
+  shared_ptr<PreparedStatementData> prepared;
+};
+
 void do_nothing_context(ClientContext*) {}
 
 static unique_ptr<GPUPhysicalOperator> GPUGeneratePhysicalPlan(
@@ -293,6 +308,44 @@ unique_ptr<FunctionData> SiriusExtension::GPUProcessingBind(ClientContext& conte
   for (auto& type : planner.types) {
     return_types.emplace_back(type);
   }
+
+  return std::move(result);
+}
+
+unique_ptr<FunctionData> SiriusExtension::GPUGraphBind(ClientContext& context,
+                                                       TableFunctionBindInput& input,
+                                                       vector<LogicalType>& return_types,
+                                                       vector<string>& names)
+{
+  if (input.inputs[0].IsNull()) {
+    throw BinderException("gpu_graph cannot be called with a NULL parameter");
+  }
+
+  auto result         = make_uniq<GPUGraphFunctionData>();
+  result->query       = input.inputs[0].ToString();
+  result->conn        = make_uniq<Connection>(*context.db);
+  result->gpu_context = make_uniq<GPUContext>(context);
+  result->parsed      = GraphQueryParser::Parse(result->query);
+
+  const auto& parsed = result->parsed;
+
+  for (auto& col : parsed.output_columns) {
+    if (col == "distance") {
+      return_types.emplace_back(LogicalType::DOUBLE);
+    } else if (col == "predecessor") {
+      return_types.emplace_back(LogicalType::BIGINT);
+    } else if (col == "path") {
+      return_types.emplace_back(LogicalType::VARCHAR);
+    } else {
+      return_types.emplace_back(LogicalType::BIGINT);
+    }
+    names.emplace_back(col);
+  }
+
+  result->prepared            = make_shared_ptr<PreparedStatementData>(StatementType::SELECT_STATEMENT);
+  result->prepared->names     = names;
+  result->prepared->types     = return_types;
+  result->prepared->properties = StatementProperties();
 
   return std::move(result);
 }
@@ -455,6 +508,45 @@ void SiriusExtension::GPUExecutionFunction(ClientContext& context,
 
   output.Reference(*result_chunk);
   return;
+}
+
+void SiriusExtension::GPUGraphFunction(ClientContext& context,
+                                       TableFunctionInput& data_p,
+                                       DataChunk& output)
+{
+  auto& data = data_p.bind_data->CastNoConst<GPUGraphFunctionData>();
+  if (data.finished) { return; }
+
+  if (!data.res) {
+    auto start = std::chrono::high_resolution_clock::now();
+
+    auto csr_shared = make_shared_ptr<CachedCSR>();
+    auto csr_op = make_uniq<GPUCSRConstructionOperator>(data.prepared->types, data.parsed, 0);
+    csr_op->csr = csr_shared;
+    auto traversal = make_uniq<GPUGraphTraversalOperator>(data.prepared->types, data.parsed, csr_shared, 0);
+    traversal->children.push_back(std::move(csr_op));
+    auto gpu_prepared = make_shared_ptr<GPUPreparedStatementData>(data.prepared, std::move(traversal));
+    data.res = data.gpu_context->GPUExecuteQuery(context, data.query, gpu_prepared, {});
+
+    auto end      = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    SIRIUS_LOG_INFO("Execute query time: {:.2f} ms", duration.count() / 1000.0);
+
+    if (data.res->HasError()) {
+      SIRIUS_LOG_ERROR("GPUGraphFunction query error: {}", data.res->GetError());
+      output.SetCardinality(0);
+      data.finished = true;
+      return;
+    }
+  }
+
+  auto result_chunk = data.res->Fetch();
+  if (!result_chunk || result_chunk->size() == 0) {
+    output.SetCardinality(0);
+    data.finished = true;
+    return;
+  }
+  output.Reference(*result_chunk);
 }
 
 static unique_ptr<LogicalOperator> OptimizePlan(ClientContext& context,
@@ -650,6 +742,10 @@ void SiriusExtension::RegisterGPUFunctions(DatabaseInstance& instance)
   gpu_processing.named_parameters["enable_optimizer"] = LogicalType::BOOLEAN;
   CreateTableFunctionInfo gpu_processing_info(gpu_processing);
   catalog.CreateTableFunction(transaction, gpu_processing_info);
+
+  TableFunction gpu_graph("gpu_graph", {LogicalType::VARCHAR}, GPUGraphFunction, GPUGraphBind);
+  CreateTableFunctionInfo gpu_graph_info(gpu_graph);
+  catalog.CreateTableFunction(transaction, gpu_graph_info);
 
   TableFunction gpu_execution("gpu_execution",
                               {LogicalType::VARCHAR},

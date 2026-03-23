@@ -76,17 +76,17 @@ void GraphQueryParser::parseMatchClause(ParsedGraphQuery& q)
 
   consume(GQTokenType::MATCH, "Expected 'MATCH'");
 
-  // Source vertex pattern
+  // source vertex pattern
   consume(GQTokenType::LEFT_PAREN, "Expected '(' for source vertex pattern");
-  parseVertexPattern(q, /*isSrc=*/true);
+  parseVertexPattern(q, true);
   consume(GQTokenType::RIGHT_PAREN, "Expected ')' to close source vertex pattern");
 
-  // Edge pattern
+  // edge pattern
   parseEdgePattern(q);
 
-  // Destination vertex pattern
+  // destination vertex pattern
   consume(GQTokenType::LEFT_PAREN, "Expected '(' for destination vertex pattern");
-  parseVertexPattern(q, /*isSrc=*/false);
+  parseVertexPattern(q, false);
   consume(GQTokenType::RIGHT_PAREN, "Expected ')' to close destination vertex pattern");
 
   // Infer BFS from path pattern (only if not already set by ANY SHORTEST / SHORTEST)
@@ -241,7 +241,7 @@ void GraphQueryParser::parseColumnsClause(ParsedGraphQuery& q)
       col += "." + consume(GQTokenType::IDENTIFIER, "Expected field name after '.'").lexeme;
     }
 
-    // set flags for special column names
+    // flags for special column names
     if (col == "distance") q.return_distance = true;
     if (col == "predecessor") q.return_predecessor = true;
     if (col == "path") q.reconstruct_path = true;
@@ -277,7 +277,7 @@ std::string GraphQueryParser::consumeSubquery()
       if (depth == 0) {
         pos_--;
         break;
-      }  // leave ')' for consume() above
+      }
     }
     if (!subq.empty()) subq += ' ';
     subq += tok.lexeme;

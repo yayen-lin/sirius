@@ -198,6 +198,8 @@ set(EXTENSION_SOURCES
     src/util/segfault_backtrace_handler.cpp
     src/graph/GraphQueryLexer.cpp
     src/graph/GraphQueryParser.cpp
+    src/graph/GPUCSRConstructionOperator.cpp
+    src/graph/GPUGraphTraversalOperator.cpp
 )
 
 set(CUDA_SOURCES
@@ -223,8 +225,14 @@ set(CUDA_SOURCES
     src/cuda/operator/substring.cu
     src/cuda/operator/strlen_from_offsets.cu
     src/cuda/operator/empty_str_check.cu
+    src/cuda/operator/bfs.cu
+    src/cuda/operator/degree_count.cu
+    src/cuda/operator/edge_traversal.cu
+    src/cuda/operator/prefix_scan.cu
+    src/cuda/operator/scatter_kernel.cu
     src/cuda/print.cu
-    src/cuda/utils.cu)
+    src/cuda/utils.cu
+)
 # cmake-format: on
 
 build_static_extension(sirius ${EXTENSION_SOURCES} ${CUDA_SOURCES})
