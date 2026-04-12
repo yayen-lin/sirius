@@ -38,9 +38,6 @@ class SiriusExtension : public Extension {
   static void GPUExecutionFunction(ClientContext& context,
                                    TableFunctionInput& data_p,
                                    DataChunk& output);
-  static void GPUGraphFunction(ClientContext& context,
-                               TableFunctionInput& data_p,
-                               DataChunk& output);
   // static void GPUCachingFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk
   // &output);
   static unique_ptr<FunctionData> GPUProcessingSubstraitBind(ClientContext& context,
@@ -51,10 +48,6 @@ class SiriusExtension : public Extension {
                                                     TableFunctionBindInput& input,
                                                     vector<LogicalType>& return_types,
                                                     vector<string>& names);
-  static unique_ptr<FunctionData> GPUGraphBind(ClientContext& context,
-                                             TableFunctionBindInput& input,
-                                             vector<LogicalType>& return_types,
-                                             vector<string>& names);
   // static unique_ptr<FunctionData> GPUCachingBind(ClientContext &context, TableFunctionBindInput
   // &input, vector<LogicalType> &return_types, vector<string> &names);
 #endif
@@ -72,6 +65,15 @@ class SiriusExtension : public Extension {
                                                    TableFunctionBindInput& input,
                                                    vector<LogicalType>& return_types,
                                                    vector<string>& names);
+  // graph
+  static unique_ptr<FunctionData> GPUGraphBind(ClientContext& context,
+                                           TableFunctionBindInput& input,
+                                           vector<LogicalType>& return_types,
+                                           vector<string>& names);
+  static void GPUGraphFunction(ClientContext& context,
+                             TableFunctionInput& data_p,
+                             DataChunk& output);
+
 
   static bool buffer_is_initialized;
 };
