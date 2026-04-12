@@ -244,18 +244,6 @@ struct GPUTableFunctionData : public TableFunctionData {
   }
 };
 
-struct GPUGraphFunctionData : public TableFunctionData {
-  GPUGraphFunctionData() = default;
-  string query;
-  ParsedGraphQuery parsed;
-  bool finished = false;
-  unique_ptr<Connection> conn;
-  unique_ptr<GPUContext> gpu_context;
-  unique_ptr<QueryResult> res;
-  bool plan_built = false;
-  shared_ptr<PreparedStatementData> prepared;
-};
-
 void do_nothing_context(ClientContext*) {}
 
 static unique_ptr<GPUPhysicalOperator> GPUGeneratePhysicalPlan(
@@ -327,44 +315,6 @@ unique_ptr<FunctionData> SiriusExtension::GPUProcessingBind(ClientContext& conte
   return std::move(result);
 }
 
-unique_ptr<FunctionData> SiriusExtension::GPUGraphBind(ClientContext& context,
-                                                       TableFunctionBindInput& input,
-                                                       vector<LogicalType>& return_types,
-                                                       vector<string>& names)
-{
-  if (input.inputs[0].IsNull()) {
-    throw BinderException("gpu_graph cannot be called with a NULL parameter");
-  }
-
-  auto result         = make_uniq<GPUGraphFunctionData>();
-  result->query       = input.inputs[0].ToString();
-  result->conn        = make_uniq<Connection>(*context.db);
-  result->gpu_context = make_uniq<GPUContext>(context);
-  result->parsed      = GraphQueryParser::Parse(result->query);
-
-  const auto& parsed = result->parsed;
-
-  for (auto& col : parsed.output_columns) {
-    if (col == "distance") {
-      return_types.emplace_back(LogicalType::DOUBLE);
-    } else if (col == "predecessor") {
-      return_types.emplace_back(LogicalType::BIGINT);
-    } else if (col == "path") {
-      return_types.emplace_back(LogicalType::VARCHAR);
-    } else {
-      return_types.emplace_back(LogicalType::BIGINT);
-    }
-    names.emplace_back(col);
-  }
-
-  result->prepared            = make_shared_ptr<PreparedStatementData>(StatementType::SELECT_STATEMENT);
-  result->prepared->names     = names;
-  result->prepared->types     = return_types;
-  result->prepared->properties = StatementProperties();
-
-  return std::move(result);
-}
-
 void SiriusExtension::GPUProcessingFunction(ClientContext& context,
                                             TableFunctionInput& data_p,
                                             DataChunk& output)
@@ -422,6 +372,56 @@ static void RegisterLegacyGPUFunctions(CatalogTransaction& transaction, Catalog&
   catalog.CreateTableFunction(transaction, gpu_processing_info);
 }
 #endif  // SIRIUS_ENABLE_LEGACY
+
+struct GPUGraphFunctionData : public TableFunctionData {
+  GPUGraphFunctionData() = default;
+  string query;
+  ParsedGraphQuery parsed;
+  bool finished = false;
+  unique_ptr<Connection> conn;
+  unique_ptr<GPUContext> gpu_context;
+  unique_ptr<QueryResult> res;
+  bool plan_built = false;
+  shared_ptr<PreparedStatementData> prepared;
+};
+
+unique_ptr<FunctionData> SiriusExtension::GPUGraphBind(ClientContext& context,
+                                                       TableFunctionBindInput& input,
+                                                       vector<LogicalType>& return_types,
+                                                       vector<string>& names)
+{
+  if (input.inputs[0].IsNull()) {
+    throw BinderException("gpu_graph cannot be called with a NULL parameter");
+  }
+
+  auto result         = make_uniq<GPUGraphFunctionData>();
+  result->query       = input.inputs[0].ToString();
+  result->conn        = make_uniq<Connection>(*context.db);
+  result->gpu_context = make_uniq<GPUContext>(context);
+  result->parsed      = GraphQueryParser::Parse(result->query);
+
+  const auto& parsed = result->parsed;
+
+  for (auto& col : parsed.output_columns) {
+    if (col == "distance") {
+      return_types.emplace_back(LogicalType::DOUBLE);
+    } else if (col == "predecessor") {
+      return_types.emplace_back(LogicalType::BIGINT);
+    } else if (col == "path") {
+      return_types.emplace_back(LogicalType::VARCHAR);
+    } else {
+      return_types.emplace_back(LogicalType::BIGINT);
+    }
+    names.emplace_back(col);
+  }
+
+  result->prepared            = make_shared_ptr<PreparedStatementData>(StatementType::SELECT_STATEMENT);
+  result->prepared->names     = names;
+  result->prepared->types     = return_types;
+  result->prepared->properties = StatementProperties();
+
+  return std::move(result);
+}
 
 static unique_ptr<sirius::op::sirius_physical_operator> SiriusGeneratePhysicalPlan(
   ClientContext& context, unique_ptr<LogicalOperator>& logical_plan)
