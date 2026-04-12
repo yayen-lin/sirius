@@ -35,7 +35,7 @@ class sirius_physical_concat : public sirius_physical_partition_consumer_operato
 
   explicit sirius_physical_concat(
     duckdb::vector<duckdb::LogicalType> types,
-    duckdb::idx_t estimated_cardinality,
+    std::size_t estimated_cardinality,
     sirius_physical_operator* parent_op,
     bool is_build,
     uint64_t concat_batch_bytes = sirius::config::DEFAULT_CONCAT_BATCH_BYTES);
@@ -59,6 +59,10 @@ class sirius_physical_concat : public sirius_physical_partition_consumer_operato
 
   //! Get the parent operator (e.g., HASH_JOIN for build concat)
   sirius_physical_operator* get_parent_op() const { return _parent_op; }
+
+  //! Used when PARTITION + `update_join_exec_mode` selects BUILD_PROBE: merge all build batches
+  //! before the join so the hash join sees a single build batch.
+  void set_concat_all(bool concat_all);
 
  private:
   sirius_physical_operator* _parent_op;

@@ -49,112 +49,6 @@ namespace sirius {
 
 namespace detail {
 
-std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_gpu_with_hybrid_scan(
-  cucascade::idata_representation& source,
-  cucascade::memory::memory_space const* target_memory_space,
-  rmm::cuda_stream_view stream)
-{
-  std::cerr << "convert_host_parquet_to_gpu_with_hybrid_scan" << std::endl;
-  // Source stuff
-  auto& host_src             = source.cast<host_parquet_representation>();
-  auto const& rg_byte_ranges = host_src.get_column_chunk_byte_ranges();
-  auto reader                = host_src.get_parquet_reader();
-
-  std::vector<cudf::io::text::byte_range_info> contiguous_regions;
-  contiguous_regions.reserve(rg_byte_ranges.size());
-  int64_t offset = 0;
-  for (auto const& range : rg_byte_ranges) {
-    contiguous_regions.emplace_back(offset, range.size());
-    offset += range.size();
-  }
-
-  // Target stuff
-  rmm::device_async_resource_ref mr_ref(target_memory_space->get_default_allocator());
-  rmm::cuda_device_id target_device_id(target_memory_space->get_device_id());
-  rmm::cuda_set_device_raii target_device_raii(target_device_id);
-
-  auto const& allocation = host_src.get_column_chunks();
-
-  // The following pattern follows the example here:
-  // https://github.com/rapidsai/cudf/blob/main/cpp/examples/hybrid_scan_io/common_utils.cpp#L160
-
-  // Allocate a single device buffer and partition it according to the byte ranges
-  std::vector<cudf::device_span<uint8_t const>> column_chunk_spans_d;
-  std::unique_ptr<rmm::device_buffer> dbuffer =
-    std::make_unique<rmm::device_buffer>(host_src.get_size_in_bytes(), stream, mr_ref);
-  auto buffer_data = static_cast<uint8_t*>(dbuffer->data());
-  std::ignore =
-    std::accumulate(contiguous_regions.begin(),
-                    contiguous_regions.end(),
-                    size_t{0},
-                    [&column_chunk_spans_d, buffer_data](auto sum, auto const& byte_range) {
-                      column_chunk_spans_d.emplace_back(buffer_data + sum, byte_range.size());
-                      return sum + byte_range.size();
-                    });
-
-  // Copy HOST data to GPU with a single async batch copy.
-  size_t bytes_copied = 0;
-  std::vector<void*> dst_ptrs;
-  std::vector<void*> src_ptrs;
-  std::vector<size_t> counts;
-  while (bytes_copied < host_src.get_size_in_bytes()) {
-    auto const& block        = allocation->at(bytes_copied / allocation->block_size());
-    auto const block_offset  = bytes_copied % allocation->block_size();
-    auto const bytes_to_copy = std::min(allocation->block_size() - block_offset,
-                                        host_src.get_size_in_bytes() - bytes_copied);
-    dst_ptrs.push_back(static_cast<void*>(buffer_data + bytes_copied));
-    src_ptrs.push_back(const_cast<void*>(
-      static_cast<void const*>(reinterpret_cast<uint8_t const*>(block.data() + block_offset))));
-    counts.push_back(bytes_to_copy);
-    bytes_copied += bytes_to_copy;
-  }
-
-// Try to do batch copy if cudaMemcpyBatchAsync is possible, otherwise fall back to individual
-// async copies
-#if CUDART_VERSION >= 13000
-  cudaStream_t stream_handle = (stream.value() != nullptr && stream.value() != cudaStreamLegacy)
-                                 ? stream.value()
-                                 : cudaStreamPerThread;
-  cudaMemcpyAttributes attr{};
-  attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
-  attr.srcLocHint     = {cudaMemLocationTypeHost,
-                         host_src.get_device_id()};  // this is numa node id for pinned host
-  attr.dstLocHint     = {cudaMemLocationTypeDevice, target_memory_space->get_device_id()};
-  attr.flags          = cudaMemcpyFlagDefault;
-  RMM_CUDA_TRY(::cudaMemcpyBatchAsync(
-    dst_ptrs.data(), src_ptrs.data(), counts.data(), counts.size(), attr, stream_handle));
-  RMM_CUDA_TRY(::cudaStreamSynchronize(stream_handle));
-#else
-  for (size_t i = 0; i < dst_ptrs.size(); ++i) {
-    RMM_CUDA_TRY(::cudaMemcpyAsync(
-      dst_ptrs[i], src_ptrs[i], counts[i], cudaMemcpyHostToDevice, stream.value()));
-  }
-#endif
-
-  // Invoke the Parquet reader to materialize the table on GPU
-#if CUDF_VERSION_NUM >= 2604
-  auto column_chunk_spans_h = cudf::host_span<const cudf::device_span<uint8_t const>>(
-    column_chunk_spans_d.data(), column_chunk_spans_d.size());
-  auto result = reader.materialize_all_columns(
-    host_src.get_rg_span(), column_chunk_spans_h, host_src.get_reader_options(), stream, mr_ref);
-#else
-  // cudf 26.02 takes std::vector<rmm::device_buffer>&& instead of spans
-  std::vector<rmm::device_buffer> column_chunk_buffers;
-  for (auto const& span : column_chunk_spans_d) {
-    column_chunk_buffers.emplace_back(span.data(), span.size(), stream, mr_ref);
-  }
-  dbuffer.reset();
-  stream.synchronize();
-  auto result = reader->materialize_all_columns(
-    host_src.get_rg_span(), std::move(column_chunk_buffers), host_src.get_reader_options(), stream);
-#endif
-  auto new_table = std::move(result.tbl);  // Discard metadata
-  stream.synchronize();
-
-  return std::make_unique<cucascade::gpu_table_representation>(
-    std::move(new_table), *const_cast<cucascade::memory::memory_space*>(target_memory_space));
-}
-
 /**
  * @brief Convert host_parquet_representation to gpu_table_representation
  */
@@ -164,7 +58,8 @@ convert_host_parquet_to_gpu_with_prefetched_data_source(
   cucascade::memory::memory_space const* target_memory_space,
   rmm::cuda_stream_view stream)
 {
-  auto& host_src = source.cast<host_parquet_representation>();
+  auto& host_src                         = source.cast<host_parquet_representation>();
+  auto const& post_filter_projection_ids = host_src.get_post_filter_projection_ids();
 
   rmm::device_async_resource_ref mr_ref(target_memory_space->get_default_allocator());
   rmm::cuda_device_id target_device_id(target_memory_space->get_device_id());
@@ -194,11 +89,28 @@ convert_host_parquet_to_gpu_with_prefetched_data_source(
   opts.set_row_groups({std::vector<cudf::size_type>(host_src.get_row_group_indices().begin(),
                                                     host_src.get_row_group_indices().end())});
 
-  auto result = cudf::io::read_parquet(opts, stream, mr_ref);
+  auto [table, md] = cudf::io::read_parquet(opts, stream, mr_ref);
+
+  // Apply the post-convert hook (used by iceberg scan for V2 delete filtering).
+  if (host_src.has_post_convert_fn()) {
+    table = host_src.apply_post_convert(std::move(table), stream);
+  }
+
   stream.synchronize();
 
+  // Now we need to prune the post-filter columns from the table, if there are any.
+  if (!post_filter_projection_ids.empty()) {
+    auto columns = table->release();
+    std::vector<std::unique_ptr<cudf::column>> projected_columns;
+    projected_columns.reserve(post_filter_projection_ids.size());
+    for (auto const id : post_filter_projection_ids) {
+      projected_columns.push_back(std::move(columns[id]));
+    }
+    table = std::make_unique<cudf::table>(std::move(projected_columns));
+  }
+
   return std::make_unique<cucascade::gpu_table_representation>(
-    std::move(result.tbl), *const_cast<cucascade::memory::memory_space*>(target_memory_space));
+    std::move(table), *const_cast<cucascade::memory::memory_space*>(target_memory_space));
 }
 
 /**
@@ -253,17 +165,24 @@ std::unique_ptr<cucascade::idata_representation> convert_host_parquet_to_host_pa
   using hybrid_scan_reader = cudf::io::parquet::experimental::hybrid_scan_reader;
   auto cloned_reader       = std::make_unique<hybrid_scan_reader>(
     host_src.get_parquet_reader()->parquet_metadata(), host_src.get_reader_options());
-  return std::make_unique<host_parquet_representation>(
+  auto dst = std::make_unique<host_parquet_representation>(
     const_cast<cucascade::memory::memory_space*>(target_memory_space),
     std::move(dst_allocation),
     std::move(cloned_reader),
     host_src.get_reader_options(),
-    std::move(host_src.get_row_group_indices()),
-    std::move(host_src.get_column_chunk_byte_ranges()),
+    host_src.get_row_group_indices(),
+    host_src.get_column_chunk_byte_ranges(),
     data_size,
-    host_src.get_uncompressed_size_in_bytes(),
+    host_src.get_uncompressed_data_size_in_bytes(),
     host_src.get_file_size(),
-    host_src.get_fallback_datasource());
+    host_src.get_fallback_datasource(),
+    host_src.get_filter_expression(),
+    host_src.get_post_filter_projection_ids());
+  if (host_src.has_post_convert_fn()) { dst->set_post_convert_fn(host_src.get_post_convert_fn()); }
+  if (!host_src.get_data_file_path().empty()) {
+    dst->set_data_file_path(host_src.get_data_file_path());
+  }
+  return dst;
 }
 
 }  // namespace detail

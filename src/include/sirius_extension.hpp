@@ -28,6 +28,7 @@ class SiriusExtension : public Extension {
   std::string Version() const override;
   static void InitialGPUConfigs(DBConfig& db);
   static void RegisterGPUFunctions(DatabaseInstance& catalog);
+#ifdef SIRIUS_ENABLE_LEGACY
   static void GPUProcessingSubstraitFunction(ClientContext& context,
                                              TableFunctionInput& data_p,
                                              DataChunk& output);
@@ -56,6 +57,10 @@ class SiriusExtension : public Extension {
                                              vector<string>& names);
   // static unique_ptr<FunctionData> GPUCachingBind(ClientContext &context, TableFunctionBindInput
   // &input, vector<LogicalType> &return_types, vector<string> &names);
+#endif
+  static void GPUExecutionFunction(ClientContext& context,
+                                   TableFunctionInput& data_p,
+                                   DataChunk& output);
   static void GPUBufferInitFunction(ClientContext& context,
                                     TableFunctionInput& data_p,
                                     DataChunk& output);
