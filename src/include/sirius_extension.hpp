@@ -67,12 +67,12 @@ class SiriusExtension : public Extension {
                                                    vector<string>& names);
   // graph
   static unique_ptr<FunctionData> GPUGraphBind(ClientContext& context,
-                                           TableFunctionBindInput& input,
-                                           vector<LogicalType>& return_types,
-                                           vector<string>& names);
+                                               TableFunctionBindInput& input,
+                                               vector<LogicalType>& return_types,
+                                               vector<string>& names);
   static void GPUGraphFunction(ClientContext& context,
-                             TableFunctionInput& data_p,
-                             DataChunk& output);
+                               TableFunctionInput& data_p,
+                               DataChunk& output);
 
 
   static bool buffer_is_initialized;

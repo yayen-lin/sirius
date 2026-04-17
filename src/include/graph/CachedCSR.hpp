@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <algorithm>
 
 namespace duckdb {
 
@@ -22,7 +23,7 @@ struct CachedCSR {
                               const std::string& dst_col)
   {
     std::string upper_table = edge_table;
-    std::ranges::transform(upper_table.begin(), upper_table.end(), upper_table.begin(), ::toupper);
+    std::transform(upper_table.begin(), upper_table.end(), upper_table.begin(), ::toupper);
     return upper_table + ":" + src_col + ":" + dst_col;
   }
 };
