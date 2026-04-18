@@ -87,10 +87,10 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
       "GPUGraphTraversalOperator: subquery source filter not yet supported");
   }
 
-  const auto& src_ids = parsed.sourceLiteralIDs();
-  int64_t num_sources = static_cast<int64_t>(src_ids.size());
+  const auto& src_ids    = parsed.sourceLiteralIDs();
+  const auto num_sources = static_cast<int64_t>(src_ids.size());
 
-  int64_t* d_source_ids = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
+  auto* d_source_ids = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
   callCudaMemcpyHostToDevice(d_source_ids, const_cast<int64_t*>(src_ids.data()), num_sources, 0);
 
   int64_t* result_node_ids        = nullptr;
@@ -111,7 +111,8 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   std::vector<std::shared_ptr<::cucascade::data_batch>> batches;
 
   // create a data_batch with the results
-  // (requires converting raw GPU pointers to cudf::column objects and then wrapping in cucascade::data_batch)
+  // (requires converting raw GPU pointers to cudf::column objects and then wrapping in
+  // cucascade::data_batch)
   SIRIUS_LOG_INFO("Edge traversal complete: {} results", result_count);
 
   return std::make_unique<operator_data>();
@@ -131,10 +132,10 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
       "GPUGraphTraversalOperator: subquery source filter not yet supported");
   }
 
-  const auto& src_ids = parsed.sourceLiteralIDs();
-  int64_t num_sources = static_cast<int64_t>(src_ids.size());
+  const auto& src_ids    = parsed.sourceLiteralIDs();
+  const auto num_sources = static_cast<int64_t>(src_ids.size());
 
-  int64_t* d_source_ids = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
+  auto* d_source_ids = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
   callCudaMemcpyHostToDevice(d_source_ids, const_cast<int64_t*>(src_ids.data()), num_sources, 0);
 
   int64_t* result_node_ids        = nullptr;
