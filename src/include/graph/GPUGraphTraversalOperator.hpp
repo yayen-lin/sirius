@@ -41,7 +41,8 @@ class GPUGraphTraversalOperator : public sirius_physical_operator {
   GPUGraphTraversalOperator(duckdb::vector<duckdb::LogicalType> types,
                             const duckdb::ParsedGraphQuery& parsed,
                             duckdb::shared_ptr<duckdb::CachedCSR> csr,
-                            duckdb::idx_t estimated_cardinality);
+                            duckdb::idx_t estimated_cardinality,
+                            cucascade::memory::memory_space& gpu_memory_space);
 
   std::unique_ptr<operator_data> execute(const operator_data& input_data,
                                          rmm::cuda_stream_view stream) override;
@@ -57,6 +58,9 @@ class GPUGraphTraversalOperator : public sirius_physical_operator {
  private:
   std::unique_ptr<operator_data> RunEdgeTraversal(rmm::cuda_stream_view stream) const;
   std::unique_ptr<operator_data> RunBFS(rmm::cuda_stream_view stream) const;
+
+  // GPU memory for the constructed CSR
+  mutable cucascade::memory::memory_space* _gpu_memory_space = nullptr;
 
   // track if traversal has been executed
   mutable bool traversal_done = false;

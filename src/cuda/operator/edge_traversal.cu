@@ -1,7 +1,8 @@
-#include "gpu_buffer_manager.hpp"
 #include "utils.hpp"
 
 #include <cuda_runtime.h>
+
+#include <vector>
 
 namespace duckdb {
 
@@ -75,13 +76,12 @@ void LaunchEdgeTraversalKernel(const int64_t* csr_offsets,
     return;
   }
 
-  auto& mgr = GPUBufferManager::GetInstance();
-
   constexpr int BLOCK_SIZE = 256;
   int64_t num_blocks       = (num_sources + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
   // --- Step 1: compute per-source degrees ---
-  int64_t* src_degrees = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
+  int64_t* src_degrees = nullptr;
+  cudaMalloc(&src_degrees, num_sources * sizeof(int64_t));
   compute_src_degrees_kernel<<<num_blocks, BLOCK_SIZE>>>(
     csr_offsets, source_ids, src_degrees, num_sources);
   cudaDeviceSynchronize();
@@ -99,14 +99,15 @@ void LaunchEdgeTraversalKernel(const int64_t* csr_offsets,
   int64_t total_neighbors = h_src_offsets_out[num_sources - 1] + h_degrees[num_sources - 1];
 
   // --- Step 3: allocate output arrays ---
-  int64_t* d_src_offsets_out = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
+  int64_t* d_src_offsets_out = nullptr;
+  cudaMalloc(&d_src_offsets_out, num_sources * sizeof(int64_t));
   cudaMemcpy(d_src_offsets_out,
              h_src_offsets_out.data(),
              num_sources * sizeof(int64_t),
              cudaMemcpyHostToDevice);
 
-  out_node_ids        = mgr.customCudaMalloc<int64_t>(total_neighbors, 0, false);
-  out_predecessor_ids = mgr.customCudaMalloc<int64_t>(total_neighbors, 0, false);
+  cudaMalloc(&out_node_ids, total_neighbors * sizeof(int64_t));
+  cudaMalloc(&out_predecessor_ids, total_neighbors * sizeof(int64_t));
 
   // --- Step 4: scatter neighbors ---
   edge_traversal_kernel<<<num_blocks, BLOCK_SIZE>>>(csr_offsets,
@@ -118,8 +119,8 @@ void LaunchEdgeTraversalKernel(const int64_t* csr_offsets,
                                                     num_sources);
   cudaDeviceSynchronize();
 
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(src_degrees), 0);
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(d_src_offsets_out), 0);
+  cudaFree(src_degrees);
+  cudaFree(d_src_offsets_out);
 
   out_count = total_neighbors;
 }

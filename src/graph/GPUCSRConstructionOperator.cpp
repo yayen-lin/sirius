@@ -1,10 +1,18 @@
 #include "graph/GPUCSRConstructionOperator.hpp"
 
-#include "gpu_buffer_manager.hpp"
+#include "data/data_batch_utils.hpp"
 #include "log/logging.hpp"
 
+#include <cudf/column/column_factories.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/concatenate.hpp>
 #include <cudf/table/table_view.hpp>
+#include <cudf/types.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+
+#include <rmm/mr/cuda_memory_resource.hpp>
+
+#include <cuda_runtime.h>
 
 #include <cucascade/data/data_batch.hpp>
 
@@ -16,12 +24,103 @@ namespace sirius::op {
 
 using namespace duckdb;
 
+// ---------------------------------------------------------------------------
+// build_csr_if_needed — free function, called from GPUGraphTraversalOperator::execute()
+// while a live pipeline-task reservation is held.
+// ---------------------------------------------------------------------------
+void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view stream)
+{
+  if (csr->is_built) { return; }
+
+  SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: starting CSR build from {} pending batches",
+                  csr->pending_batches.size());
+  spdlog::default_logger()->flush();
+
+  auto start = std::chrono::high_resolution_clock::now();
+
+  if (csr->pending_batches.empty()) {
+    throw InvalidInputException("build_csr_if_needed: no edge data in pending_batches");
+  }
+
+  // extract src (col 0) and dst (col 1) column views from each batch
+  std::vector<cudf::column_view> src_views, dst_views;
+  for (auto& batch : csr->pending_batches) {
+    auto tbl = sirius::get_cudf_table_view(*batch);
+    src_views.push_back(tbl.column(0));
+    dst_views.push_back(tbl.column(1));
+  }
+
+  // Use cuda_memory_resource to bypass the cucascade reservation adaptor for cudf
+  // output allocations (internal scratch still avoids it via thrust below).
+  static rmm::mr::cuda_memory_resource cuda_mr;
+
+  SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: concatenating edge columns");
+  spdlog::default_logger()->flush();
+  auto src_concat = cudf::concatenate(src_views, stream, cuda_mr);
+  auto dst_concat = cudf::concatenate(dst_views, stream, cuda_mr);
+
+  const int64_t num_edges = src_concat->size();
+  const auto* src_ptr     = src_concat->view().data<int64_t>();
+  const auto* dst_ptr     = dst_concat->view().data<int64_t>();
+
+  SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: concatenate done, num_edges={}", num_edges);
+  spdlog::default_logger()->flush();
+
+  // find num_vertices — LaunchFindMaxKernel uses thrust in a .cu file,
+  // so it allocates via CUB (cudaMalloc) and never touches the cucascade adaptor
+  int64_t src_max = LaunchFindMaxKernel(src_ptr, num_edges);
+  int64_t dst_max = LaunchFindMaxKernel(dst_ptr, num_edges);
+  const int64_t num_vertices = std::max(src_max, dst_max) + 1;
+
+  SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: num_vertices={}", num_vertices);
+  spdlog::default_logger()->flush();
+
+  // allocate CSR arrays with cudaMalloc (outside the cucascade pool)
+  int64_t* degree  = nullptr;
+  int64_t* offsets = nullptr;
+  int64_t* indices = nullptr;
+  cudaMalloc(&degree, num_vertices * sizeof(int64_t));
+  cudaMalloc(&offsets, (num_vertices + 1) * sizeof(int64_t));
+  cudaMalloc(&indices, num_edges * sizeof(int64_t));
+
+  cudaMemset(degree, 0, num_vertices * sizeof(int64_t));
+  LaunchDegreeCountKernel(src_ptr, degree, num_edges, num_vertices);
+  LaunchPrefixScanKernel(degree, offsets, num_vertices);
+  LaunchScatterKernel(src_ptr, dst_ptr, offsets, indices, num_edges, num_vertices);
+  cudaDeviceSynchronize();
+  cudaFree(degree);
+
+  csr->offsets      = offsets;
+  csr->indices      = indices;
+  csr->num_vertices = num_vertices;
+  csr->num_edges    = num_edges;
+  csr->is_weighted  = false;
+  csr->is_built     = true;
+
+  // release the raw edge batches now that we no longer need them
+  csr->pending_batches.clear();
+
+  auto end      = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: CSR built — {} vertices, {} edges ({:.2f} ms)",
+                  num_vertices,
+                  num_edges,
+                  duration.count() / 1000.0);
+  spdlog::default_logger()->flush();
+}
+
+// ---------------------------------------------------------------------------
+// GPUCSRConstructionOperator
+// ---------------------------------------------------------------------------
+
 GPUCSRConstructionOperator::GPUCSRConstructionOperator(vector<LogicalType> types,
                                                        const ParsedGraphQuery& parsed,
-                                                       idx_t estimated_cardinality)
+                                                       idx_t estimated_cardinality,
+                                                       cucascade::memory::memory_space& gpu_memory_space)
   : sirius_physical_operator(
       SiriusPhysicalOperatorType::CSR_CONSTRUCTION, std::move(types), estimated_cardinality),
-    parsed(parsed)
+    parsed(parsed),
+    _gpu_memory_space(&gpu_memory_space)
 {
 }
 
@@ -35,162 +134,36 @@ std::string GPUCSRConstructionOperator::params_to_string() const
 std::unique_ptr<operator_data> GPUCSRConstructionOperator::execute(const operator_data& input_data,
                                                                    rmm::cuda_stream_view stream)
 {
-  // pass through empty data
-  return std::make_unique<operator_data>();
-}
+  SIRIUS_LOG_INFO("[GRAPH] CSR execute() called");
+  spdlog::default_logger()->flush();
 
-// receives edge data and builds the CSR
-void GPUCSRConstructionOperator::sink(const operator_data& input_data, rmm::cuda_stream_view stream)
-{
-  auto start = high_resolution_clock::now();
-
-  auto& mgr        = GPUBufferManager::GetInstance();
-  const string key = CachedCSR::MakeKey(parsed.edge_table,
-                                        parsed.edge_src_col.empty() ? "src" : parsed.edge_src_col,
-                                        parsed.edge_dst_col.empty() ? "dst" : parsed.edge_dst_col);
-
-  // cache hit - reuse existing CSR, skip construction entirely
-  auto it = mgr.csr_cache.find(key);
-  if (it != mgr.csr_cache.end()) {
-    csr = it->second;
-    SIRIUS_LOG_INFO("CSR cache hit for key '{}', skipping construction", key);
-    return;
-  }
-
-  // cache miss - read edge columns directly from buffer manager
-  SIRIUS_LOG_INFO("CSR cache miss for key '{}', building CSR from cached table", key);
-
-  string up_table = parsed.edge_table;
-  std::ranges::transform(up_table.begin(), up_table.end(), up_table.begin(), ::toupper);
-
-  string src_col = parsed.edge_src_col.empty() ? "SRC" : parsed.edge_src_col;
-  string dst_col = parsed.edge_dst_col.empty() ? "DST" : parsed.edge_dst_col;
-  std::ranges::transform(src_col.begin(), src_col.end(), src_col.begin(), ::toupper);
-  std::ranges::transform(dst_col.begin(), dst_col.end(), dst_col.begin(), ::toupper);
-
-  if (!mgr.checkIfColumnCached(up_table, src_col) || !mgr.checkIfColumnCached(up_table, dst_col)) {
-    throw InvalidInputException(
-      "Edge table '{}' with columns '{}'/'{}' not cached. "
-      "Call gpu_execution('SELECT * FROM {}') first.",
-      parsed.edge_table,
-      src_col,
-      dst_col,
-      parsed.edge_table);
-  }
-
-  auto& table   = mgr.tables[up_table];
-  auto src_it   = std::find(table->column_names.begin(), table->column_names.end(), src_col);
-  auto dst_it   = std::find(table->column_names.begin(), table->column_names.end(), dst_col);
-  idx_t src_idx = std::distance(table->column_names.begin(), src_it);
-  idx_t dst_idx = std::distance(table->column_names.begin(), dst_it);
-
-  // convert cached GPU columns to data_batch format for BuildCSR
-  // right now create a simple wrapper
-  // eventually this should use the actual data_batch from the scan operator
-  std::vector<std::shared_ptr<::cucascade::data_batch>> edge_batches;
-
-  // TODO: once integrated with scan operator, use actual input_data.get_data_batches()
-  // right now it builds from buffer manager's cached columns
-  // eventually it should integrate with table scan pipeline to receive data as data_batch objects
-  BuildCSR(edge_batches, stream);
-
-  auto end      = high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<microseconds>(end - start);
-  SIRIUS_LOG_INFO("CSR construction time: {:.2f} ms", duration.count() / 1000.0);
-}
-
-// ---------------------------------------------------------------------------
-// BuildCSR - runs the three CUDA kernels and stores result in csr_cache
-// ---------------------------------------------------------------------------
-void GPUCSRConstructionOperator::BuildCSR(
-  const std::vector<std::shared_ptr<::cucascade::data_batch>>& edge_batches,
-  rmm::cuda_stream_view stream) const
-{
-  auto& mgr = GPUBufferManager::GetInstance();
-
-  // read from buffer manager directly
-  // (once scan integration is complete, extract from edge_batches parameter)
-  string up_table = parsed.edge_table;
-  std::transform(up_table.begin(), up_table.end(), up_table.begin(), ::toupper);
-
-  string src_col = parsed.edge_src_col.empty() ? "SRC" : parsed.edge_src_col;
-  string dst_col = parsed.edge_dst_col.empty() ? "DST" : parsed.edge_dst_col;
-  std::transform(src_col.begin(), src_col.end(), src_col.begin(), ::toupper);
-  std::transform(dst_col.begin(), dst_col.end(), dst_col.begin(), ::toupper);
-
-  auto& table = mgr.tables[up_table];
-  auto src_it = std::find(table->column_names.begin(), table->column_names.end(), src_col);
-  auto dst_it = std::find(table->column_names.begin(), table->column_names.end(), dst_col);
-  idx_t src_idx = std::distance(table->column_names.begin(), src_it);
-  idx_t dst_idx = std::distance(table->column_names.begin(), dst_it);
-
-  // column pointers from buffer manager
-  auto* src_ptr           = reinterpret_cast<int64_t*>(table->columns[src_idx]->data_wrapper.data);
-  auto* dst_ptr           = reinterpret_cast<int64_t*>(table->columns[dst_idx]->data_wrapper.data);
-  const int64_t num_edges = static_cast<int64_t>(table->columns[src_idx]->column_length);
-
-  // determine num_vertices by finding max ID across both columns
-  // TODO: replace with GPU reduce kernel to avoid CPU roundtrip
-  int64_t max_id = 0;
-  {
-    std::vector<int64_t> src_host(num_edges), dst_host(num_edges);
-    callCudaMemcpyDeviceToHost(src_host.data(), src_ptr, num_edges, 0);
-    callCudaMemcpyDeviceToHost(dst_host.data(), dst_ptr, num_edges, 0);
-    for (int64_t i = 0; i < num_edges; i++) {
-      max_id = std::max(max_id, std::max(src_host[i], dst_host[i]));
+  auto* p = dynamic_cast<const pipelineable_operator_data*>(&input_data);
+  if (p) {
+    for (auto& batch : p->get_data_batches()) {
+      if (batch) { csr->pending_batches.push_back(batch); }
     }
+    SIRIUS_LOG_DEBUG("[GRAPH] CSR execute(): pending_batches now={}", csr->pending_batches.size());
   }
-  const int64_t num_vertices = max_id + 1;
 
-  SIRIUS_LOG_DEBUG("Building CSR: {} vertices, {} edges", num_vertices, num_edges);
+  // Return a 0-row trigger batch so the pipeline infrastructure pushes something
+  // to GRAPH_TRAVERSAL's repo. Without this the task_creator sees an empty repo
+  // and never creates a task for Pipeline #2, causing a hang.
+  // GRAPH_TRAVERSAL ignores input_data entirely; it reads from the shared csr pointer.
+  std::vector<std::unique_ptr<cudf::column>> cols;
+  cols.push_back(cudf::make_empty_column(cudf::data_type{cudf::type_id::INT64}));
+  auto trigger_table = std::make_unique<cudf::table>(std::move(cols));
+  auto trigger_batch = sirius::make_data_batch(std::move(trigger_table), *_gpu_memory_space);
+  return std::make_unique<pipelineable_operator_data>(
+    std::vector<std::shared_ptr<::cucascade::data_batch>>{std::move(trigger_batch)});
+}
 
-  // allocate CSR arrays in GPU cache (if cached it survives across queries)
-  int64_t* degree  = mgr.customCudaMalloc<int64_t>(num_vertices, 0, /*caching=*/false);
-  int64_t* offsets = mgr.customCudaMalloc<int64_t>(num_vertices + 1, 0, /*caching=*/true);
-  int64_t* indices = mgr.customCudaMalloc<int64_t>(num_edges, 0, /*caching=*/true);
-  cudaMemset(degree, 0, num_vertices * sizeof(int64_t));
-
-  // --- Kernel 1: degree counting ---
-  SIRIUS_LOG_DEBUG("Launching degree count kernel");
-  LaunchDegreeCountKernel(src_ptr, degree, num_edges, num_vertices);
-
-  // --- Kernel 2: prefix scan (exclusive) → offsets ---
-  SIRIUS_LOG_DEBUG("Launching prefix scan kernel");
-  // TODO: swap to benchmark
-  // LaunchCubExclusiveScan(degree, offsets, num_vertices);
-  LaunchPrefixScanKernel(degree, offsets, num_vertices);
-
-  // --- Kernel 3: scatter edges into indices ---
-  SIRIUS_LOG_DEBUG("Launching scatter kernel");
-  // Scatter needs a mutable copy of offsets as write cursors; reuse degree array
-  // as scratch space since it's no longer needed after the prefix scan
-  LaunchScatterKernel(src_ptr, dst_ptr, offsets, indices, num_edges, num_vertices);
-
-  // Synchronize stream to ensure kernels complete
-  stream.synchronize();
-
-  // Free scratch degree array (not cached)
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(degree), 0);
-
-  // Store in cache
-  auto new_csr          = make_shared_ptr<CachedCSR>();
-  new_csr->offsets      = offsets;
-  new_csr->indices      = indices;
-  new_csr->num_vertices = num_vertices;
-  new_csr->num_edges    = num_edges;
-  new_csr->is_weighted  = false;
-
-  const string key = CachedCSR::MakeKey(parsed.edge_table,
-                                        parsed.edge_src_col.empty() ? "src" : parsed.edge_src_col,
-                                        parsed.edge_dst_col.empty() ? "dst" : parsed.edge_dst_col);
-
-  mgr.csr_cache[key] = new_csr;
-  csr                = new_csr;
-
-  SIRIUS_LOG_INFO("CSR construction complete: {} vertices, {} edges cached at key '{}'",
-                  num_vertices,
-                  num_edges,
-                  key);
+void GPUCSRConstructionOperator::finalize_operator()
+{
+  // GPU work is deferred to GPUGraphTraversalOperator::execute() where a live
+  // pipeline-task reservation is held. Nothing to do here.
+  SIRIUS_LOG_INFO("[GRAPH] CSR finalize_operator(): pending_batches={}, deferred to traversal",
+                  csr->pending_batches.size());
+  spdlog::default_logger()->flush();
 }
 
 }  // namespace sirius::op

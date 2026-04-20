@@ -1,4 +1,6 @@
-#include "gpu_buffer_manager.hpp"
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/extrema.h>
 
 #include <cuda_runtime.h>
 
@@ -71,6 +73,21 @@ void LaunchDegreeCountKernel(const int64_t* src,
     degree_count_kernel<<<num_blocks, BLOCK_SIZE>>>(src, degree, num_edges, tile_start);
   }
   cudaDeviceSynchronize();
+}
+
+// ---------------------------------------------------------------------------
+// LaunchFindMaxKernel
+//   Returns the maximum value in a device int64_t array.
+//   Uses thrust on the CUDA execution policy; safe to call from .cu files.
+//   Allocates via thrust's CUB backend (cudaMalloc), not through RMM.
+// ---------------------------------------------------------------------------
+int64_t LaunchFindMaxKernel(const int64_t* data, int64_t n)
+{
+  if (n == 0) { return -1; }
+  auto ptr = thrust::device_ptr<const int64_t>(data);
+  auto it  = thrust::max_element(thrust::cuda::par, ptr, ptr + n);
+  cudaDeviceSynchronize();
+  return *it;  // thrust::device_ptr dereference copies one value to host
 }
 
 }  // namespace duckdb

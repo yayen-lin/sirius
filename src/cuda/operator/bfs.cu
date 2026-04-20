@@ -1,7 +1,8 @@
-#include "gpu_buffer_manager.hpp"
 #include "utils.hpp"
 
 #include <cuda_runtime.h>
+
+#include <vector>
 
 namespace duckdb {
 
@@ -105,24 +106,25 @@ void LaunchBFSKernel(const int64_t* csr_offsets,
     return;
   }
 
-  auto& mgr = GPUBufferManager::GetInstance();
-
   constexpr int BLOCK_SIZE = 256;
 
-  // --- Allocate BFS state arrays ---
-  int64_t* visited     = mgr.customCudaMalloc<int64_t>(num_vertices, 0, /*caching=*/false);
-  int64_t* predecessor = mgr.customCudaMalloc<int64_t>(num_vertices, 0, /*caching=*/false);
+  // --- Allocate BFS state arrays via cudaMalloc (bypass legacy GPU buffer manager) ---
+  int64_t* visited     = nullptr;
+  int64_t* predecessor = nullptr;
+  cudaMalloc(&visited, num_vertices * sizeof(int64_t));
+  cudaMalloc(&predecessor, num_vertices * sizeof(int64_t));
 
-  // Initialise visited to UNVISITED (-1)
-  // cudaMemset sets bytes not values, so we use a fill via cudaMemset(-1)
-  // which sets all bytes to 0xFF - for int64_t this gives -1 (two's complement)
+  // Initialise visited to UNVISITED (-1): all bytes 0xFF → int64_t = -1 (two's complement)
   cudaMemset(visited, 0xFF, num_vertices * sizeof(int64_t));
   cudaMemset(predecessor, 0xFF, num_vertices * sizeof(int64_t));
 
   // Frontier ping-pong buffers - worst case all vertices in frontier
-  int64_t* frontier_a    = mgr.customCudaMalloc<int64_t>(num_vertices, 0, /*caching=*/false);
-  int64_t* frontier_b    = mgr.customCudaMalloc<int64_t>(num_vertices, 0, /*caching=*/false);
-  int64_t* frontier_size = mgr.customCudaMalloc<int64_t>(1, 0, /*caching=*/false);
+  int64_t* frontier_a    = nullptr;
+  int64_t* frontier_b    = nullptr;
+  int64_t* frontier_size = nullptr;
+  cudaMalloc(&frontier_a, num_vertices * sizeof(int64_t));
+  cudaMalloc(&frontier_b, num_vertices * sizeof(int64_t));
+  cudaMalloc(&frontier_size, sizeof(int64_t));
 
   // --- Initialise frontier with source vertices ---
   cudaMemset(frontier_size, 0, sizeof(int64_t));
@@ -185,9 +187,9 @@ void LaunchBFSKernel(const int64_t* csr_offsets,
   out_count = static_cast<int64_t>(h_node_ids.size());
 
   // Copy results back to GPU for output_relation
-  out_node_ids     = mgr.customCudaMalloc<int64_t>(out_count, 0, /*caching=*/false);
-  out_distances    = mgr.customCudaMalloc<int64_t>(out_count, 0, /*caching=*/false);
-  out_predecessors = mgr.customCudaMalloc<int64_t>(out_count, 0, /*caching=*/false);
+  cudaMalloc(&out_node_ids, out_count * sizeof(int64_t));
+  cudaMalloc(&out_distances, out_count * sizeof(int64_t));
+  cudaMalloc(&out_predecessors, out_count * sizeof(int64_t));
 
   cudaMemcpy(out_node_ids, h_node_ids.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice);
   cudaMemcpy(
@@ -196,11 +198,11 @@ void LaunchBFSKernel(const int64_t* csr_offsets,
     out_predecessors, h_predecessors.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice);
 
   // --- Free BFS state ---
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(visited), 0);
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(predecessor), 0);
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(frontier_a), 0);
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(frontier_b), 0);
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(frontier_size), 0);
+  cudaFree(visited);
+  cudaFree(predecessor);
+  cudaFree(frontier_a);
+  cudaFree(frontier_b);
+  cudaFree(frontier_size);
 }
 
 }  // namespace duckdb

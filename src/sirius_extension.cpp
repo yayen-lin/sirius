@@ -517,7 +517,7 @@ unique_ptr<FunctionData> SiriusExtension::GPUGraphBind(ClientContext& context,
   const auto& parsed = result->parsed;
   for (auto& col : parsed.output_columns) {
     if (col == "distance") {
-      return_types.emplace_back(LogicalType::DOUBLE);
+      return_types.emplace_back(LogicalType::BIGINT);
     } else if (col == "predecessor") {
       return_types.emplace_back(LogicalType::BIGINT);
     } else if (col == "path") {
@@ -534,13 +534,36 @@ unique_ptr<FunctionData> SiriusExtension::GPUGraphBind(ClientContext& context,
   base_prepared->properties = StatementProperties();
 
   // build operator chain at bind time
+  //
+  // pipeline shape:
+  //   EdgeScan (source) → CSR_CONSTRUCTION (sink) → [csr_shared populated]
+  //   CSR_CONSTRUCTION (source) → GRAPH_TRAVERSAL (operator) → RESULT_COLLECTOR (sink)
+
+  // plan a scan of the edge table for the two edge columns
+  const string src_col   = parsed.edge_src_col.empty() ? "src" : parsed.edge_src_col;
+  const string dst_col   = parsed.edge_dst_col.empty() ? "dst" : parsed.edge_dst_col;
+  const string scan_sql  = "SELECT " + src_col + ", " + dst_col + " FROM " + parsed.edge_table;
+  Parser scan_parser(context.GetParserOptions());
+  scan_parser.ParseQuery(scan_sql);
+  Planner scan_planner(context);
+  scan_planner.CreatePlan(std::move(scan_parser.statements[0]));
+  D_ASSERT(scan_planner.plan);
+  auto scan_op = SiriusGeneratePhysicalPlan(context, scan_planner.plan);
+
+  // get GPU memory space from SiriusContext
+  auto sirius_ctx = context.registered_state->Get<duckdb::SiriusContext>("sirius_state");
+  auto gpu_spaces = sirius_ctx->get_memory_manager()
+                                .get_memory_spaces_for_tier(cucascade::memory::Tier::GPU);
+  auto& gpu_memory_space = *const_cast<cucascade::memory::memory_space*>(gpu_spaces[0]);
+
   auto csr_shared = make_shared_ptr<CachedCSR>();
-  auto csr_op =
-    make_uniq<sirius::op::GPUCSRConstructionOperator>(base_prepared->types, result->parsed, 0);
+  auto csr_op = make_uniq<sirius::op::GPUCSRConstructionOperator>(
+    base_prepared->types, result->parsed, 0, gpu_memory_space);
   csr_op->csr = csr_shared;
+  csr_op->children.push_back(std::move(scan_op));
 
   auto traversal = make_uniq<sirius::op::GPUGraphTraversalOperator>(
-    base_prepared->types, result->parsed, csr_shared, 0);
+    base_prepared->types, result->parsed, csr_shared, 0, gpu_memory_space);
 
   traversal->children.push_back(std::move(csr_op));
 
@@ -558,9 +581,16 @@ void SiriusExtension::GPUGraphFunction(ClientContext& context,
   if (data.finished) { return; }
 
   if (!data.res) {
+    SIRIUS_LOG_INFO("[GRAPH] GPUGraphFunction: calling sirius_execute_query, query='{}'",
+                    data.query);
+    spdlog::default_logger()->flush();
     auto start = std::chrono::high_resolution_clock::now();
 
     data.res = data.sirius_iface->sirius_execute_query(context, data.query, data.gpu_prepared, {});
+    // Release GPU resources (CachedCSR, result buffers) immediately now that the query is done.
+    // Without this, they survive until DuckDB shuts down — by which point the CUDA runtime
+    // may already be torn down via its atexit handler, causing cudaFree to crash.
+    data.gpu_prepared.reset();
 
     auto end      = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);

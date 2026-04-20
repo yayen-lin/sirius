@@ -1,11 +1,16 @@
 #include "graph/GPUGraphTraversalOperator.hpp"
+#include "graph/GPUCSRConstructionOperator.hpp"  // for build_csr_if_needed
 
-#include "gpu_buffer_manager.hpp"
+#include "data/data_batch_utils.hpp"
 #include "log/logging.hpp"
-#include "utils.hpp"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/types.hpp>
+
+#include <rmm/device_buffer.hpp>
+#include <rmm/mr/cuda_memory_resource.hpp>
+
+#include <cuda_runtime.h>
 
 #include <cucascade/data/data_batch.hpp>
 
@@ -16,14 +21,17 @@ namespace sirius::op {
 
 using namespace duckdb;
 
-GPUGraphTraversalOperator::GPUGraphTraversalOperator(vector<LogicalType> types,
-                                                     const ParsedGraphQuery& parsed,
-                                                     shared_ptr<CachedCSR> csr,
-                                                     idx_t estimated_cardinality)
+GPUGraphTraversalOperator::GPUGraphTraversalOperator(
+  vector<LogicalType> types,
+  const ParsedGraphQuery& parsed,
+  shared_ptr<CachedCSR> csr,
+  idx_t estimated_cardinality,
+  cucascade::memory::memory_space& gpu_memory_space)
   : sirius_physical_operator(
       SiriusPhysicalOperatorType::GRAPH_TRAVERSAL, std::move(types), estimated_cardinality),
     parsed(parsed),
-    csr(std::move(csr))
+    csr(std::move(csr)),
+    _gpu_memory_space(&gpu_memory_space)
 {
 }
 
@@ -45,10 +53,17 @@ std::string GPUGraphTraversalOperator::params_to_string() const
 std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator_data& input_data,
                                                                   rmm::cuda_stream_view stream)
 {
+  SIRIUS_LOG_INFO("[GRAPH] GPUGraphTraversalOperator::execute() called, traversal_done={}",
+                  traversal_done);
+  spdlog::default_logger()->flush();
   if (!csr) { throw InternalException("GPUGraphTraversalOperator: CSR is null"); }
 
   // return cached result on subsequent calls
   if (traversal_done && cached_result) { return std::make_unique<operator_data>(*cached_result); }
+
+  // Build CSR here, inside execute() where a live pipeline-task reservation is held.
+  // This avoids the 0-byte-budget OOM that occurs when building in finalize_operator().
+  build_csr_if_needed(csr, stream);
 
   auto start = std::chrono::high_resolution_clock::now();
 
@@ -75,8 +90,6 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator
 std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   rmm::cuda_stream_view stream) const
 {
-  auto& mgr = GPUBufferManager::GetInstance();
-
   if (!parsed.has_source_filter) {
     throw NotImplementedException(
       "GPUGraphTraversalOperator: edge traversal without source filter not yet supported");
@@ -90,8 +103,9 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   const auto& src_ids    = parsed.sourceLiteralIDs();
   const auto num_sources = static_cast<int64_t>(src_ids.size());
 
-  auto* d_source_ids = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
-  callCudaMemcpyHostToDevice(d_source_ids, const_cast<int64_t*>(src_ids.data()), num_sources, 0);
+  static rmm::mr::cuda_memory_resource cuda_mr;
+  rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, &cuda_mr);
+  auto* d_source_ids = static_cast<int64_t*>(d_source_buf.data());
 
   int64_t* result_node_ids        = nullptr;
   int64_t* result_predecessor_ids = nullptr;
@@ -104,24 +118,50 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
                             result_predecessor_ids,
                             result_count);
 
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(d_source_ids), 0);
+  // Emit columns in the order declared in COLUMNS (...), using output_columns names.
+  // "distance" for direct edge traversal is always 1 (one hop).
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  std::vector<int64_t> h_ones(result_count, 1);  // constant distance=1 buffer for edge traversal
 
-  // convert results to data_batch format
-  // TODO: construct cudf columns and wrap in data_batch
-  std::vector<std::shared_ptr<::cucascade::data_batch>> batches;
+  for (const auto& col_name : parsed.output_columns) {
+    if (col_name == "predecessor") {
+      columns.push_back(std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT64},
+        result_count,
+        rmm::device_buffer(result_predecessor_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer{},
+        0));
+    } else if (col_name == "distance") {
+      columns.push_back(std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT64},
+        result_count,
+        rmm::device_buffer(h_ones.data(), result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer{},
+        0));
+    } else {
+      columns.push_back(std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT64},
+        result_count,
+        rmm::device_buffer(result_node_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer{},
+        0));
+    }
+  }
 
-  // create a data_batch with the results
-  // (requires converting raw GPU pointers to cudf::column objects and then wrapping in
-  // cucascade::data_batch)
+  cudaFree(result_node_ids);
+  cudaFree(result_predecessor_ids);
+
+  auto result_table = std::make_unique<cudf::table>(std::move(columns));
+  auto batch        = sirius::make_data_batch(std::move(result_table), *_gpu_memory_space);
+  std::vector<std::shared_ptr<cucascade::data_batch>> batches;
+  batches.push_back(std::move(batch));
+
   SIRIUS_LOG_INFO("Edge traversal complete: {} results", result_count);
-
-  return std::make_unique<operator_data>();
+  return std::make_unique<pipelineable_operator_data>(std::move(batches));
 }
 
 std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_stream_view stream) const
 {
-  auto& mgr = GPUBufferManager::GetInstance();
-
   if (!parsed.has_source_filter) {
     throw NotImplementedException(
       "GPUGraphTraversalOperator: BFS without source filter not yet supported");
@@ -135,8 +175,9 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
   const auto& src_ids    = parsed.sourceLiteralIDs();
   const auto num_sources = static_cast<int64_t>(src_ids.size());
 
-  auto* d_source_ids = mgr.customCudaMalloc<int64_t>(num_sources, 0, false);
-  callCudaMemcpyHostToDevice(d_source_ids, const_cast<int64_t*>(src_ids.data()), num_sources, 0);
+  static rmm::mr::cuda_memory_resource cuda_mr;
+  rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, &cuda_mr);
+  auto* d_source_ids = reinterpret_cast<int64_t*>(d_source_buf.data());
 
   int64_t* result_node_ids        = nullptr;
   int64_t* result_distances       = nullptr;
@@ -152,14 +193,45 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
                   result_predecessor_ids,
                   result_count);
 
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(d_source_ids), 0);
+  // Emit columns in the order declared in COLUMNS (...), using output_columns names.
+  std::vector<std::unique_ptr<cudf::column>> columns;
 
-  // convert results to data_batch format
-  std::vector<std::shared_ptr<::cucascade::data_batch>> batches;
+  for (const auto& col_name : parsed.output_columns) {
+    if (col_name == "distance") {
+      columns.push_back(std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT64},
+        result_count,
+        rmm::device_buffer(result_distances, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer{},
+        0));
+    } else if (col_name == "predecessor") {
+      columns.push_back(std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT64},
+        result_count,
+        rmm::device_buffer(result_predecessor_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer{},
+        0));
+    } else {
+      columns.push_back(std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT64},
+        result_count,
+        rmm::device_buffer(result_node_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer{},
+        0));
+    }
+  }
+
+  cudaFree(result_node_ids);
+  cudaFree(result_distances);
+  cudaFree(result_predecessor_ids);
+
+  auto result_table = std::make_unique<cudf::table>(std::move(columns));
+  auto batch        = sirius::make_data_batch(std::move(result_table), *_gpu_memory_space);
+  std::vector<std::shared_ptr<cucascade::data_batch>> batches;
+  batches.push_back(std::move(batch));
 
   SIRIUS_LOG_INFO("BFS complete: {} results", result_count);
-
-  return std::make_unique<operator_data>();
+  return std::make_unique<pipelineable_operator_data>(std::move(batches));
 }
 
 }  // namespace sirius::op

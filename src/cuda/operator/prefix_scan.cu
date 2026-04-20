@@ -1,6 +1,6 @@
-#include "gpu_buffer_manager.hpp"
-
 #include <cuda_runtime.h>
+
+#include <vector>
 
 namespace duckdb {
 
@@ -50,8 +50,7 @@ __global__ void down_sweep_kernel(const int64_t* __restrict__ degree,
   shared[threadIdx.x] = (idx < num_vertices) ? degree[idx] : 0;
   __syncthreads();
 
-  // Exclusive scan within block (Hillis-Steele style up-sweep then down-sweep)
-  // Up-sweep
+  // Inclusive prefix scan within block (Hillis-Steele up-sweep)
   for (int stride = 1; stride < blockDim.x; stride <<= 1) {
     int64_t val = 0;
     if (threadIdx.x >= stride) { val = shared[threadIdx.x - stride]; }
@@ -60,19 +59,10 @@ __global__ void down_sweep_kernel(const int64_t* __restrict__ degree,
     __syncthreads();
   }
 
-  // Convert inclusive to exclusive by shifting right within block
-  // int64_t inclusive = shared[threadIdx.x];
-  // __syncthreads();
-
-  int64_t exclusive = (threadIdx.x == 0) ? 0 : shared[threadIdx.x - 1];
-  __syncthreads();
-
-  // Add block base offset from pass 1
+  // offsets[idx+1] = inclusive prefix sum up to vertex idx = sum(degree[0..idx])
+  // offsets[0] = 0 is set explicitly by the launcher before this kernel runs.
   int64_t base = block_sums_scanned[blockIdx.x];
-
-  // offsets is shifted by 1 to produce CSR format:
-  // offsets[0] = 0, offsets[i+1] = exclusive_sum[i] + base
-  if (idx < num_vertices) { offsets[idx + 1] = exclusive + base; }
+  if (idx < num_vertices) { offsets[idx + 1] = shared[threadIdx.x] + base; }
 }
 
 // ---------------------------------------------------------------------------
@@ -85,12 +75,13 @@ void LaunchPrefixScanKernel(const int64_t* degree, int64_t* offsets, int64_t num
 {
   if (num_vertices == 0) return;
 
-  auto& mgr = GPUBufferManager::GetInstance();
-
   int64_t num_blocks = (num_vertices + SCAN_BLOCK_SIZE - 1) / SCAN_BLOCK_SIZE;
 
-  // Allocate block_sums on GPU (non-caching, temporary)
-  int64_t* block_sums = mgr.customCudaMalloc<int64_t>(num_blocks, 0, false);
+  // Allocate block_sums with cudaMalloc — this is a small temporary buffer
+  // that must not go through the legacy GPU buffer manager (it has 0-byte budget
+  // when called from the graph pipeline).
+  int64_t* block_sums = nullptr;
+  cudaMalloc(&block_sums, num_blocks * sizeof(int64_t));
 
   // --- Pass 1: per-block reduction ---
   reduce_kernel<<<num_blocks, SCAN_BLOCK_SIZE>>>(degree, block_sums, num_vertices);
@@ -118,7 +109,7 @@ void LaunchPrefixScanKernel(const int64_t* degree, int64_t* offsets, int64_t num
   down_sweep_kernel<<<num_blocks, SCAN_BLOCK_SIZE>>>(degree, block_sums, offsets, num_vertices);
   cudaDeviceSynchronize();
 
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(block_sums), 0);
+  cudaFree(block_sums);
 }
 
 

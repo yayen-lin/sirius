@@ -1,5 +1,3 @@
-#include "gpu_buffer_manager.hpp"
-
 #include <cuda_runtime.h>
 
 namespace duckdb {
@@ -41,10 +39,10 @@ void LaunchScatterKernel(const int64_t* src,
 {
   if (num_edges == 0) return;
 
-  auto& mgr = GPUBufferManager::GetInstance();
-
-  // Allocate temporary write cursors - copy of offsets, consumed during scatter
-  auto* write_cursors = mgr.customCudaMalloc<int64_t>(num_vertices + 1, 0, false);
+  // Allocate temporary write cursors with cudaMalloc — must not use the legacy
+  // GPU buffer manager which has 0-byte budget in the graph pipeline.
+  int64_t* write_cursors = nullptr;
+  cudaMalloc(&write_cursors, (num_vertices + 1) * sizeof(int64_t));
   cudaMemcpy(
     write_cursors, offsets, (num_vertices + 1) * sizeof(int64_t), cudaMemcpyDeviceToDevice);
 
@@ -54,7 +52,7 @@ void LaunchScatterKernel(const int64_t* src,
   scatter_kernel<<<num_blocks, BLOCK_SIZE>>>(src, dst, write_cursors, indices, num_edges);
   cudaDeviceSynchronize();
 
-  mgr.customCudaFree(reinterpret_cast<uint8_t*>(write_cursors), 0);
+  cudaFree(write_cursors);
 }
 
 }  // namespace duckdb
