@@ -528,47 +528,51 @@ unique_ptr<FunctionData> SiriusExtension::GPUGraphBind(ClientContext& context,
     names.emplace_back(col);
   }
 
+  // build operator tree
+  // scan_op feeds edge batches into csr_op
+  // csr_op accumulates into csr_shared
+  // traversal_op triggers CSR construction from csr_shared, then runs the graph algorithm
   auto base_prepared   = make_shared_ptr<PreparedStatementData>(StatementType::SELECT_STATEMENT);
   base_prepared->names = names;
   base_prepared->types = return_types;
   base_prepared->properties = StatementProperties();
 
-  // build operator chain at bind time
-  //
-  // pipeline shape:
-  //   EdgeScan (source) → CSR_CONSTRUCTION (sink) → [csr_shared populated]
-  //   CSR_CONSTRUCTION (source) → GRAPH_TRAVERSAL (operator) → RESULT_COLLECTOR (sink)
-
   // plan a scan of the edge table for the two edge columns
-  const string src_col   = parsed.edge_src_col.empty() ? "src" : parsed.edge_src_col;
-  const string dst_col   = parsed.edge_dst_col.empty() ? "dst" : parsed.edge_dst_col;
-  const string scan_sql  = "SELECT " + src_col + ", " + dst_col + " FROM " + parsed.edge_table;
+  const string src_col  = parsed.edge_src_col.empty() ? "src" : parsed.edge_src_col;
+  const string dst_col  = parsed.edge_dst_col.empty() ? "dst" : parsed.edge_dst_col;
+  const string scan_sql = "SELECT " + src_col + ", " + dst_col + " FROM " + parsed.edge_table;
   Parser scan_parser(context.GetParserOptions());
   scan_parser.ParseQuery(scan_sql);
+
+  // scan op
   Planner scan_planner(context);
   scan_planner.CreatePlan(std::move(scan_parser.statements[0]));
   D_ASSERT(scan_planner.plan);
   auto scan_op = SiriusGeneratePhysicalPlan(context, scan_planner.plan);
 
-  // get GPU memory space from SiriusContext
+  // get gpu memory space from SiriusContext
   auto sirius_ctx = context.registered_state->Get<duckdb::SiriusContext>("sirius_state");
-  auto gpu_spaces = sirius_ctx->get_memory_manager()
-                                .get_memory_spaces_for_tier(cucascade::memory::Tier::GPU);
+  auto gpu_spaces =
+    sirius_ctx->get_memory_manager().get_memory_spaces_for_tier(cucascade::memory::Tier::GPU);
   auto& gpu_memory_space = *const_cast<cucascade::memory::memory_space*>(gpu_spaces[0]);
 
+  // cache csr for sharing between ops
   auto csr_shared = make_shared_ptr<CachedCSR>();
-  auto csr_op = make_uniq<sirius::op::GPUCSRConstructionOperator>(
+
+  // set up csr op for fetching/construction
+  auto csr_op     = make_uniq<sirius::op::GPUCSRConstructionOperator>(
     base_prepared->types, result->parsed, 0, gpu_memory_space);
   csr_op->csr = csr_shared;
   csr_op->children.push_back(std::move(scan_op));
 
-  auto traversal = make_uniq<sirius::op::GPUGraphTraversalOperator>(
+  // set up traversal op
+  auto traversal_op = make_uniq<sirius::op::GPUGraphTraversalOperator>(
     base_prepared->types, result->parsed, csr_shared, 0, gpu_memory_space);
+  traversal_op->children.push_back(std::move(csr_op));
 
-  traversal->children.push_back(std::move(csr_op));
-
+  // set up result handler
   result->gpu_prepared = make_shared_ptr<::sirius::sirius_prepared_statement_data>(
-    std::move(base_prepared), std::move(traversal));
+    std::move(base_prepared), std::move(traversal_op));
 
   return std::move(result);
 }
@@ -583,13 +587,10 @@ void SiriusExtension::GPUGraphFunction(ClientContext& context,
   if (!data.res) {
     SIRIUS_LOG_INFO("[GRAPH] GPUGraphFunction: calling sirius_execute_query, query='{}'",
                     data.query);
-    spdlog::default_logger()->flush();
     auto start = std::chrono::high_resolution_clock::now();
 
     data.res = data.sirius_iface->sirius_execute_query(context, data.query, data.gpu_prepared, {});
-    // Release GPU resources (CachedCSR, result buffers) immediately now that the query is done.
-    // Without this, they survive until DuckDB shuts down — by which point the CUDA runtime
-    // may already be torn down via its atexit handler, causing cudaFree to crash.
+    // TODO: cache csr for reuse on the same node/edge table
     data.gpu_prepared.reset();
 
     auto end      = std::chrono::high_resolution_clock::now();

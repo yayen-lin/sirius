@@ -33,8 +33,7 @@ namespace sirius::op {
 
 // Build the CSR from pending_batches inside csr if not yet built.
 // Safe to call from within operator::execute() where a live reservation is held.
-void build_csr_if_needed(duckdb::shared_ptr<duckdb::CachedCSR>& csr,
-                         rmm::cuda_stream_view stream);
+void build_csr_if_needed(duckdb::shared_ptr<duckdb::CachedCSR>& csr, rmm::cuda_stream_view stream);
 
 class GPUCSRConstructionOperator : public sirius_physical_operator {
  public:

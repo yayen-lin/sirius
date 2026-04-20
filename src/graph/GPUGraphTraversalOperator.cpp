@@ -55,7 +55,6 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator
 {
   SIRIUS_LOG_INFO("[GRAPH] GPUGraphTraversalOperator::execute() called, traversal_done={}",
                   traversal_done);
-  spdlog::default_logger()->flush();
   if (!csr) { throw InternalException("GPUGraphTraversalOperator: CSR is null"); }
 
   // return cached result on subsequent calls

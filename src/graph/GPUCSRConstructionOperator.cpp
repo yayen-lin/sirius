@@ -24,17 +24,14 @@ namespace sirius::op {
 
 using namespace duckdb;
 
-// ---------------------------------------------------------------------------
 // build_csr_if_needed — free function, called from GPUGraphTraversalOperator::execute()
 // while a live pipeline-task reservation is held.
-// ---------------------------------------------------------------------------
 void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view stream)
 {
   if (csr->is_built) { return; }
 
   SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: starting CSR build from {} pending batches",
                   csr->pending_batches.size());
-  spdlog::default_logger()->flush();
 
   auto start = std::chrono::high_resolution_clock::now();
 
@@ -55,7 +52,6 @@ void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view strea
   static rmm::mr::cuda_memory_resource cuda_mr;
 
   SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: concatenating edge columns");
-  spdlog::default_logger()->flush();
   auto src_concat = cudf::concatenate(src_views, stream, cuda_mr);
   auto dst_concat = cudf::concatenate(dst_views, stream, cuda_mr);
 
@@ -64,16 +60,14 @@ void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view strea
   const auto* dst_ptr     = dst_concat->view().data<int64_t>();
 
   SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: concatenate done, num_edges={}", num_edges);
-  spdlog::default_logger()->flush();
 
   // find num_vertices — LaunchFindMaxKernel uses thrust in a .cu file,
   // so it allocates via CUB (cudaMalloc) and never touches the cucascade adaptor
-  int64_t src_max = LaunchFindMaxKernel(src_ptr, num_edges);
-  int64_t dst_max = LaunchFindMaxKernel(dst_ptr, num_edges);
+  int64_t src_max            = LaunchFindMaxKernel(src_ptr, num_edges);
+  int64_t dst_max            = LaunchFindMaxKernel(dst_ptr, num_edges);
   const int64_t num_vertices = std::max(src_max, dst_max) + 1;
 
   SIRIUS_LOG_INFO("[GRAPH] build_csr_if_needed: num_vertices={}", num_vertices);
-  spdlog::default_logger()->flush();
 
   // allocate CSR arrays with cudaMalloc (outside the cucascade pool)
   int64_t* degree  = nullptr;
@@ -106,17 +100,13 @@ void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view strea
                   num_vertices,
                   num_edges,
                   duration.count() / 1000.0);
-  spdlog::default_logger()->flush();
 }
 
-// ---------------------------------------------------------------------------
-// GPUCSRConstructionOperator
-// ---------------------------------------------------------------------------
-
-GPUCSRConstructionOperator::GPUCSRConstructionOperator(vector<LogicalType> types,
-                                                       const ParsedGraphQuery& parsed,
-                                                       idx_t estimated_cardinality,
-                                                       cucascade::memory::memory_space& gpu_memory_space)
+GPUCSRConstructionOperator::GPUCSRConstructionOperator(
+  vector<LogicalType> types,
+  const ParsedGraphQuery& parsed,
+  idx_t estimated_cardinality,
+  cucascade::memory::memory_space& gpu_memory_space)
   : sirius_physical_operator(
       SiriusPhysicalOperatorType::CSR_CONSTRUCTION, std::move(types), estimated_cardinality),
     parsed(parsed),
@@ -135,7 +125,6 @@ std::unique_ptr<operator_data> GPUCSRConstructionOperator::execute(const operato
                                                                    rmm::cuda_stream_view stream)
 {
   SIRIUS_LOG_INFO("[GRAPH] CSR execute() called");
-  spdlog::default_logger()->flush();
 
   auto* p = dynamic_cast<const pipelineable_operator_data*>(&input_data);
   if (p) {
@@ -163,7 +152,6 @@ void GPUCSRConstructionOperator::finalize_operator()
   // pipeline-task reservation is held. Nothing to do here.
   SIRIUS_LOG_INFO("[GRAPH] CSR finalize_operator(): pending_batches={}, deferred to traversal",
                   csr->pending_batches.size());
-  spdlog::default_logger()->flush();
 }
 
 }  // namespace sirius::op

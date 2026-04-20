@@ -9,7 +9,7 @@
 #include <duckdb.hpp>
 
 /* forward declarations (src/cuda/operator/) */
-namespace duckdb { // TODO: add more operators like multi-source bfs, SSSP, etc
+namespace duckdb {  // TODO: add more operators like multi-source bfs, SSSP, etc
 
 // simple edge traversal kernel
 void LaunchEdgeTraversalKernel(const int64_t* offsets,
