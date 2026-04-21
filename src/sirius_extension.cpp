@@ -528,47 +528,109 @@ unique_ptr<FunctionData> SiriusExtension::GPUGraphBind(ClientContext& context,
     names.emplace_back(col);
   }
 
-  // build operator tree
-  // scan_op feeds edge batches into csr_op
-  // csr_op accumulates into csr_shared
-  // traversal_op triggers CSR construction from csr_shared, then runs the graph algorithm
+  // build operator tree:
+  //  - scan_op:      feeds edge batches into csr_op
+  //  - csr_op:       accumulates into csr_shared (or detects cached CSR and emits a cheap trigger)
+  //  - traversal_op: triggers CSR construction from csr_shared, then runs the graph algorithm
   auto base_prepared   = make_shared_ptr<PreparedStatementData>(StatementType::SELECT_STATEMENT);
   base_prepared->names = names;
   base_prepared->types = return_types;
   base_prepared->properties = StatementProperties();
 
-  // plan a scan of the edge table for the two edge columns
-  const string src_col  = parsed.edge_src_col.empty() ? "src" : parsed.edge_src_col;
-  const string dst_col  = parsed.edge_dst_col.empty() ? "dst" : parsed.edge_dst_col;
-  const string scan_sql = "SELECT " + src_col + ", " + dst_col + " FROM " + parsed.edge_table;
-  Parser scan_parser(context.GetParserOptions());
-  scan_parser.ParseQuery(scan_sql);
+  const string src_col   = parsed.edge_src_col.empty() ? "src" : parsed.edge_src_col;
+  const string dst_col   = parsed.edge_dst_col.empty() ? "dst" : parsed.edge_dst_col;
+  const string cache_key = CachedCSR::MakeKey(parsed.edge_table, src_col, dst_col);
 
-  // scan op
-  Planner scan_planner(context);
-  scan_planner.CreatePlan(std::move(scan_parser.statements[0]));
-  D_ASSERT(scan_planner.plan);
-  auto scan_op = SiriusGeneratePhysicalPlan(context, scan_planner.plan);
+  // check the process-global CSR cache for a pre-built CSR
+  auto cached_csr   = CsrCache::instance().find(cache_key);
+  bool csr_is_ready = (cached_csr != nullptr && cached_csr->is_built);
 
-  // get gpu memory space from SiriusContext
+  SIRIUS_LOG_DEBUG("[GRAPH] GPUGraphBind: cache lookup for key '{}' — found={}, is_built={}",
+                   cache_key,
+                   (cached_csr != nullptr),
+                   (cached_csr ? cached_csr->is_built : false));
+
+  shared_ptr<CachedCSR> csr_shared;
+  if (csr_is_ready) {
+    SIRIUS_LOG_DEBUG("[GRAPH] CSR cache HIT for key '{}' — skipping edge table scan", cache_key);
+    csr_shared = cached_csr;
+    SIRIUS_LOG_DEBUG(
+      "[GRAPH] CSR cache HIT: num_vertices={}, num_edges={}, pending_batches.size()={}",
+      csr_shared->num_vertices,
+      csr_shared->num_edges,
+      csr_shared->pending_batches.size());
+  } else {
+    SIRIUS_LOG_DEBUG("[GRAPH] CSR cache MISS for key '{}' — scanning edge table", cache_key);
+    csr_shared            = make_shared_ptr<CachedCSR>();
+    csr_shared->key       = cache_key;
+    const string scan_sql = "SELECT " + src_col + ", " + dst_col + " FROM " + parsed.edge_table;
+    Parser scan_parser(context.GetParserOptions());
+    scan_parser.ParseQuery(scan_sql);
+    Planner scan_planner(context);
+    scan_planner.CreatePlan(std::move(scan_parser.statements[0]));
+    D_ASSERT(scan_planner.plan);
+    auto scan_op = SiriusGeneratePhysicalPlan(context, scan_planner.plan);
+
+    // get gpu memory space from SiriusContext (only needed for non-cached path setup below)
+    auto sirius_ctx_inner = context.registered_state->Get<duckdb::SiriusContext>("sirius_state");
+    auto gpu_spaces_inner = sirius_ctx_inner->get_memory_manager().get_memory_spaces_for_tier(
+      cucascade::memory::Tier::GPU);
+    auto& gpu_memory_space_inner =
+      *const_cast<cucascade::memory::memory_space*>(gpu_spaces_inner[0]);
+
+    SIRIUS_LOG_DEBUG(
+      "[GRAPH] GPUGraphBind: non-cached path — building operator tree with scan child");
+    auto csr_op_inner = make_uniq<sirius::op::GPUCSRConstructionOperator>(
+      base_prepared->types, result->parsed, 0, gpu_memory_space_inner);
+    csr_op_inner->csr = csr_shared;
+    csr_op_inner->children.push_back(std::move(scan_op));
+    SIRIUS_LOG_DEBUG("[GRAPH] GPUGraphBind: non-cached path — CSR op created, children.size()={}",
+                     csr_op_inner->children.size());
+
+    auto traversal_op_inner = make_uniq<sirius::op::GPUGraphTraversalOperator>(
+      base_prepared->types, result->parsed, csr_shared, 0, gpu_memory_space_inner);
+    traversal_op_inner->children.push_back(std::move(csr_op_inner));
+    SIRIUS_LOG_DEBUG(
+      "[GRAPH] GPUGraphBind: non-cached path — traversal op created, children.size()={}",
+      traversal_op_inner->children.size());
+
+    result->gpu_prepared = make_shared_ptr<::sirius::sirius_prepared_statement_data>(
+      std::move(base_prepared), std::move(traversal_op_inner));
+    return std::move(result);
+  }
+
+  // Cached path: CSR is ready, but we still need a dummy scan to maintain pipeline structure.
+  // The scan will return 0 rows (LIMIT 0), but it establishes the proper port connections.
+  SIRIUS_LOG_DEBUG("[GRAPH] GPUGraphBind: cached path — building operator tree with dummy scan");
+
+  const string dummy_scan_sql =
+    "SELECT " + src_col + ", " + dst_col + " FROM " + parsed.edge_table + " LIMIT 0";
+  Parser dummy_parser(context.GetParserOptions());
+  dummy_parser.ParseQuery(dummy_scan_sql);
+  Planner dummy_planner(context);
+  dummy_planner.CreatePlan(std::move(dummy_parser.statements[0]));
+  D_ASSERT(dummy_planner.plan);
+  auto dummy_scan_op = SiriusGeneratePhysicalPlan(context, dummy_planner.plan);
+
   auto sirius_ctx = context.registered_state->Get<duckdb::SiriusContext>("sirius_state");
   auto gpu_spaces =
     sirius_ctx->get_memory_manager().get_memory_spaces_for_tier(cucascade::memory::Tier::GPU);
   auto& gpu_memory_space = *const_cast<cucascade::memory::memory_space*>(gpu_spaces[0]);
 
-  // cache csr for sharing between ops
-  auto csr_shared = make_shared_ptr<CachedCSR>();
-
-  // set up csr op for fetching/construction
-  auto csr_op     = make_uniq<sirius::op::GPUCSRConstructionOperator>(
+  auto csr_op = make_uniq<sirius::op::GPUCSRConstructionOperator>(
     base_prepared->types, result->parsed, 0, gpu_memory_space);
   csr_op->csr = csr_shared;
-  csr_op->children.push_back(std::move(scan_op));
+  csr_op->children.push_back(std::move(dummy_scan_op));
+  SIRIUS_LOG_DEBUG(
+    "[GRAPH] GPUGraphBind: cached path — CSR op created with dummy scan, children.size()={}",
+    csr_op->children.size());
 
   // set up traversal op
   auto traversal_op = make_uniq<sirius::op::GPUGraphTraversalOperator>(
     base_prepared->types, result->parsed, csr_shared, 0, gpu_memory_space);
   traversal_op->children.push_back(std::move(csr_op));
+  SIRIUS_LOG_DEBUG("[GRAPH] GPUGraphBind: cached path — traversal op created, children.size()={}",
+                   traversal_op->children.size());
 
   // set up result handler
   result->gpu_prepared = make_shared_ptr<::sirius::sirius_prepared_statement_data>(
@@ -585,11 +647,14 @@ void SiriusExtension::GPUGraphFunction(ClientContext& context,
   if (data.finished) { return; }
 
   if (!data.res) {
-    SIRIUS_LOG_INFO("[GRAPH] GPUGraphFunction: calling sirius_execute_query, query='{}'",
-                    data.query);
+    SIRIUS_LOG_DEBUG(
+      "[GRAPH] GPUGraphFunction: calling sirius_execute_query, query='{}', gpu_prepared={}",
+      data.query,
+      (void*)data.gpu_prepared.get());
     auto start = std::chrono::high_resolution_clock::now();
 
     data.res = data.sirius_iface->sirius_execute_query(context, data.query, data.gpu_prepared, {});
+    SIRIUS_LOG_DEBUG("[GRAPH] GPUGraphFunction: sirius_execute_query completed");
     // TODO: cache csr for reuse on the same node/edge table
     data.gpu_prepared.reset();
 

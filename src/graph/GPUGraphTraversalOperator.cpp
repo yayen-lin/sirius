@@ -53,15 +53,14 @@ std::string GPUGraphTraversalOperator::params_to_string() const
 std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator_data& input_data,
                                                                   rmm::cuda_stream_view stream)
 {
-  SIRIUS_LOG_INFO("[GRAPH] GPUGraphTraversalOperator::execute() called, traversal_done={}",
+  SIRIUS_LOG_DEBUG("[GRAPH] GPUGraphTraversalOperator::execute() called, traversal_done={}",
                   traversal_done);
   if (!csr) { throw InternalException("GPUGraphTraversalOperator: CSR is null"); }
 
   // return cached result on subsequent calls
   if (traversal_done && cached_result) { return std::make_unique<operator_data>(*cached_result); }
 
-  // Build CSR here, inside execute() where a live pipeline-task reservation is held.
-  // This avoids the 0-byte-budget OOM that occurs when building in finalize_operator().
+  // build CSR here in execute() where a live pipeline-task reservation is held.
   build_csr_if_needed(csr, stream);
 
   auto start = std::chrono::high_resolution_clock::now();
@@ -81,7 +80,7 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_INFO("GPUGraphTraversalOperator traversal time: {:.2f} ms", duration.count() / 1000.0);
+  SIRIUS_LOG_DEBUG("GPUGraphTraversalOperator traversal time: {:.2f} ms", duration.count() / 1000.0);
 
   return result;
 }
@@ -109,16 +108,14 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   int64_t* result_node_ids        = nullptr;
   int64_t* result_predecessor_ids = nullptr;
   int64_t result_count            = 0;
-  LaunchEdgeTraversalKernel(csr->offsets,
-                            csr->indices,
+  LaunchEdgeTraversalKernel(csr->offsets.data(),
+                            csr->indices.data(),
                             d_source_ids,
                             num_sources,
                             result_node_ids,
                             result_predecessor_ids,
                             result_count);
 
-  // Emit columns in the order declared in COLUMNS (...), using output_columns names.
-  // "distance" for direct edge traversal is always 1 (one hop).
   std::vector<std::unique_ptr<cudf::column>> columns;
   std::vector<int64_t> h_ones(result_count, 1);  // constant distance=1 buffer for edge traversal
 
@@ -155,7 +152,7 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   std::vector<std::shared_ptr<cucascade::data_batch>> batches;
   batches.push_back(std::move(batch));
 
-  SIRIUS_LOG_INFO("Edge traversal complete: {} results", result_count);
+  SIRIUS_LOG_DEBUG("Edge traversal complete: {} results", result_count);
   return std::make_unique<pipelineable_operator_data>(std::move(batches));
 }
 
@@ -176,14 +173,14 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
 
   static rmm::mr::cuda_memory_resource cuda_mr;
   rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, &cuda_mr);
-  auto* d_source_ids = reinterpret_cast<int64_t*>(d_source_buf.data());
+  auto* d_source_ids = static_cast<int64_t*>(d_source_buf.data());
 
   int64_t* result_node_ids        = nullptr;
   int64_t* result_distances       = nullptr;
   int64_t* result_predecessor_ids = nullptr;
   int64_t result_count            = 0;
-  LaunchBFSKernel(csr->offsets,
-                  csr->indices,
+  LaunchBFSKernel(csr->offsets.data(),
+                  csr->indices.data(),
                   d_source_ids,
                   num_sources,
                   csr->num_vertices,
@@ -229,7 +226,7 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
   std::vector<std::shared_ptr<cucascade::data_batch>> batches;
   batches.push_back(std::move(batch));
 
-  SIRIUS_LOG_INFO("BFS complete: {} results", result_count);
+  SIRIUS_LOG_DEBUG("BFS complete: {} results", result_count);
   return std::make_unique<pipelineable_operator_data>(std::move(batches));
 }
 

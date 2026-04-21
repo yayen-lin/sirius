@@ -31,8 +31,7 @@ void LaunchScatterKernel(const int64_t* src_col,
 
 namespace sirius::op {
 
-// Build the CSR from pending_batches inside csr if not yet built.
-// Safe to call from within operator::execute() where a live reservation is held.
+// Build the CSR from pending_batches inside csr if not yet built
 void build_csr_if_needed(duckdb::shared_ptr<duckdb::CachedCSR>& csr, rmm::cuda_stream_view stream);
 
 class GPUCSRConstructionOperator : public sirius_physical_operator {
@@ -52,6 +51,9 @@ class GPUCSRConstructionOperator : public sirius_physical_operator {
   bool is_sink() const override { return true; }
 
   std::string params_to_string() const override;
+
+  void build_pipelines(pipeline::sirius_pipeline& current,
+                       pipeline::sirius_meta_pipeline& meta_pipeline) override;
 
   duckdb::ParsedGraphQuery parsed;
 
