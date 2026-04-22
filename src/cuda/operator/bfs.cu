@@ -2,9 +2,26 @@
 
 #include <cuda_runtime.h>
 
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
+
 #include <vector>
 
 namespace duckdb {
+
+// ---------------------------------------------------------------------------
+// BFSResult - RAII container for BFS output
+// ---------------------------------------------------------------------------
+struct BFSResult {
+  rmm::device_uvector<int64_t> node_ids;
+  rmm::device_uvector<int64_t> distances;
+  rmm::device_uvector<int64_t> predecessors;
+
+  BFSResult(rmm::device_uvector<int64_t>&& nodes,
+           rmm::device_uvector<int64_t>&& dists,
+           rmm::device_uvector<int64_t>&& preds)
+    : node_ids(std::move(nodes)), distances(std::move(dists)), predecessors(std::move(preds)) {}
+};
 
 static constexpr int64_t UNVISITED = -1;
 
@@ -82,84 +99,75 @@ __global__ void bfs_expand_kernel(const int64_t* __restrict__ csr_offsets,
 //   Initialises BFS from source vertices, then expands level by level
 //   until the frontier is empty.
 //
-//   Outputs:
-//     out_node_ids       - all reached vertices (excluding sources)
-//     out_distances      - distance from nearest source
-//     out_predecessors   - predecessor on shortest path
-//     out_count          - number of reached vertices
+//   Outputs: BFSResult containing node_ids, distances, and predecessors
+//   (all reached vertices including sources)
+//
+//   Now uses RMM for memory management and returns device_uvectors.
 // ---------------------------------------------------------------------------
-void LaunchBFSKernel(const int64_t* csr_offsets,
-                     const int64_t* csr_indices,
-                     const int64_t* source_ids,
-                     int64_t num_sources,
-                     int64_t num_vertices,
-                     int64_t*& out_node_ids,
-                     int64_t*& out_distances,
-                     int64_t*& out_predecessors,
-                     int64_t& out_count)
+BFSResult LaunchBFSKernel(const int64_t* csr_offsets,
+                          const int64_t* csr_indices,
+                          const int64_t* source_ids,
+                          int64_t num_sources,
+                          int64_t num_vertices,
+                          rmm::cuda_stream_view stream,
+                          rmm::device_async_resource_ref mr)
 {
   if (num_sources == 0 || num_vertices == 0) {
-    out_node_ids     = nullptr;
-    out_distances    = nullptr;
-    out_predecessors = nullptr;
-    out_count        = 0;
-    return;
+    return BFSResult(rmm::device_uvector<int64_t>(0, stream, mr),
+                    rmm::device_uvector<int64_t>(0, stream, mr),
+                    rmm::device_uvector<int64_t>(0, stream, mr));
   }
 
   constexpr int BLOCK_SIZE = 256;
 
-  // --- Allocate BFS state arrays via cudaMalloc (bypass legacy GPU buffer manager) ---
-  int64_t* visited     = nullptr;
-  int64_t* predecessor = nullptr;
-  cudaMalloc(&visited, num_vertices * sizeof(int64_t));
-  cudaMalloc(&predecessor, num_vertices * sizeof(int64_t));
+  // --- Allocate BFS state arrays with RMM ---
+  rmm::device_uvector<int64_t> visited(num_vertices, stream, mr);
+  rmm::device_uvector<int64_t> predecessor(num_vertices, stream, mr);
 
   // Initialise visited to UNVISITED (-1): all bytes 0xFF → int64_t = -1 (two's complement)
-  cudaMemset(visited, 0xFF, num_vertices * sizeof(int64_t));
-  cudaMemset(predecessor, 0xFF, num_vertices * sizeof(int64_t));
+  cudaMemsetAsync(visited.data(), 0xFF, num_vertices * sizeof(int64_t), stream.value());
+  cudaMemsetAsync(predecessor.data(), 0xFF, num_vertices * sizeof(int64_t), stream.value());
 
   // Frontier ping-pong buffers - worst case all vertices in frontier
-  int64_t* frontier_a    = nullptr;
-  int64_t* frontier_b    = nullptr;
-  int64_t* frontier_size = nullptr;
-  cudaMalloc(&frontier_a, num_vertices * sizeof(int64_t));
-  cudaMalloc(&frontier_b, num_vertices * sizeof(int64_t));
-  cudaMalloc(&frontier_size, sizeof(int64_t));
+  rmm::device_uvector<int64_t> frontier_a(num_vertices, stream, mr);
+  rmm::device_uvector<int64_t> frontier_b(num_vertices, stream, mr);
+  rmm::device_uvector<int64_t> frontier_size(1, stream, mr);
 
   // --- Initialise frontier with source vertices ---
-  cudaMemset(frontier_size, 0, sizeof(int64_t));
+  cudaMemsetAsync(frontier_size.data(), 0, sizeof(int64_t), stream.value());
 
   int64_t init_blocks = (num_sources + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  bfs_init_kernel<<<init_blocks, BLOCK_SIZE>>>(
-    source_ids, visited, predecessor, frontier_a, frontier_size, num_sources);
-  cudaDeviceSynchronize();
+  bfs_init_kernel<<<init_blocks, BLOCK_SIZE, 0, stream.value()>>>(
+    source_ids, visited.data(), predecessor.data(), frontier_a.data(), frontier_size.data(), num_sources);
 
   int64_t h_frontier_size = 0;
-  cudaMemcpy(&h_frontier_size, frontier_size, sizeof(int64_t), cudaMemcpyDeviceToHost);
+  cudaMemcpyAsync(&h_frontier_size, frontier_size.data(), sizeof(int64_t), cudaMemcpyDeviceToHost, stream.value());
+  stream.synchronize();
 
   // --- BFS level-by-level expansion ---
-  int64_t* current_frontier = frontier_a;
-  int64_t* next_frontier    = frontier_b;
+  int64_t* current_frontier = frontier_a.data();
+  int64_t* next_frontier    = frontier_b.data();
   int64_t current_distance  = 0;
 
   while (h_frontier_size > 0) {
     // Reset next frontier size
-    cudaMemset(frontier_size, 0, sizeof(int64_t));
+    cudaMemsetAsync(frontier_size.data(), 0, sizeof(int64_t), stream.value());
 
     int64_t expand_blocks = (h_frontier_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    bfs_expand_kernel<<<expand_blocks, BLOCK_SIZE>>>(csr_offsets,
-                                                     csr_indices,
-                                                     current_frontier,
-                                                     next_frontier,
-                                                     frontier_size,
-                                                     visited,
-                                                     predecessor,
-                                                     h_frontier_size,
-                                                     current_distance);
-    cudaDeviceSynchronize();
+    bfs_expand_kernel<<<expand_blocks, BLOCK_SIZE, 0, stream.value()>>>(
+      csr_offsets,
+      csr_indices,
+      current_frontier,
+      next_frontier,
+      frontier_size.data(),
+      visited.data(),
+      predecessor.data(),
+      h_frontier_size,
+      current_distance);
 
     // Read next frontier size back to CPU to control the loop
-    cudaMemcpy(&h_frontier_size, frontier_size, sizeof(int64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(&h_frontier_size, frontier_size.data(), sizeof(int64_t), cudaMemcpyDeviceToHost, stream.value());
+    stream.synchronize();
 
     // Swap frontiers
     std::swap(current_frontier, next_frontier);
@@ -171,9 +179,9 @@ void LaunchBFSKernel(const int64_t* csr_offsets,
   // TODO: replace with GPU compaction kernel (stream compaction)
   std::vector<int64_t> h_visited(num_vertices);
   std::vector<int64_t> h_predecessor(num_vertices);
-  cudaMemcpy(h_visited.data(), visited, num_vertices * sizeof(int64_t), cudaMemcpyDeviceToHost);
-  cudaMemcpy(
-    h_predecessor.data(), predecessor, num_vertices * sizeof(int64_t), cudaMemcpyDeviceToHost);
+  cudaMemcpyAsync(h_visited.data(), visited.data(), num_vertices * sizeof(int64_t), cudaMemcpyDeviceToHost, stream.value());
+  cudaMemcpyAsync(h_predecessor.data(), predecessor.data(), num_vertices * sizeof(int64_t), cudaMemcpyDeviceToHost, stream.value());
+  stream.synchronize();
 
   std::vector<int64_t> h_node_ids, h_distances, h_predecessors;
   for (int64_t v = 0; v < num_vertices; v++) {
@@ -184,25 +192,20 @@ void LaunchBFSKernel(const int64_t* csr_offsets,
     }
   }
 
-  out_count = static_cast<int64_t>(h_node_ids.size());
+  int64_t out_count = static_cast<int64_t>(h_node_ids.size());
 
-  // Copy results back to GPU for output_relation
-  cudaMalloc(&out_node_ids, out_count * sizeof(int64_t));
-  cudaMalloc(&out_distances, out_count * sizeof(int64_t));
-  cudaMalloc(&out_predecessors, out_count * sizeof(int64_t));
+  // Copy results back to GPU with RMM
+  rmm::device_uvector<int64_t> out_node_ids(out_count, stream, mr);
+  rmm::device_uvector<int64_t> out_distances(out_count, stream, mr);
+  rmm::device_uvector<int64_t> out_predecessors(out_count, stream, mr);
 
-  cudaMemcpy(out_node_ids, h_node_ids.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice);
-  cudaMemcpy(
-    out_distances, h_distances.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice);
-  cudaMemcpy(
-    out_predecessors, h_predecessors.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(out_node_ids.data(), h_node_ids.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice, stream.value());
+  cudaMemcpyAsync(out_distances.data(), h_distances.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice, stream.value());
+  cudaMemcpyAsync(out_predecessors.data(), h_predecessors.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice, stream.value());
 
-  // --- Free BFS state ---
-  cudaFree(visited);
-  cudaFree(predecessor);
-  cudaFree(frontier_a);
-  cudaFree(frontier_b);
-  cudaFree(frontier_size);
+  // visited, predecessor, frontiers freed automatically
+
+  return BFSResult(std::move(out_node_ids), std::move(out_distances), std::move(out_predecessors));
 }
 
 }  // namespace duckdb

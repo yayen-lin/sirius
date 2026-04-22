@@ -7,7 +7,6 @@
 #include <duckdb/common/shared_ptr.hpp>
 
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -35,6 +34,9 @@ struct CachedCSR {
   // accumulated by GPUCSRConstructionOperator::execute()
   // consumed and cleared by build_csr_if_needed() after build
   std::vector<std::shared_ptr<::cucascade::data_batch>> pending_batches;
+
+  // Protects CSR construction - ensures only one thread builds while others wait
+  std::mutex build_mutex;
 
   // cache key: "EDGE_TABLE:src_col:dst_col"
   static std::string MakeKey(const std::string& edge_table,

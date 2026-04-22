@@ -21,7 +21,7 @@
 
 #include <algorithm>
 #include <chrono>
-#include <stdexcept>
+#include <mutex>
 
 namespace sirius::op {
 
@@ -29,7 +29,17 @@ using namespace duckdb;
 
 void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view stream)
 {
+  // Fast path: check without lock (avoids contention after first build)
   if (csr->is_built) { return; }
+
+  // Acquire lock to ensure only one thread builds the CSR
+  std::lock_guard<std::mutex> lock(csr->build_mutex);
+
+  // Double-checked locking: another thread may have built it while we waited for the lock
+  if (csr->is_built) {
+    SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: CSR already built by another thread");
+    return;
+  }
 
   SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: starting CSR build from {} pending batches",
                   csr->pending_batches.size());
@@ -48,8 +58,10 @@ void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view strea
     dst_views.push_back(tbl.column(1));
   }
 
-  // cuda_memory_resource to bypass the cucascade reservation adaptor for cudf output allocations
+  // Use cuda_memory_resource for cudf operations (bypass cucascade for cudf's internal allocations)
+  // Use current device resource for our kernel allocations (cucascade-managed)
   static rmm::mr::cuda_memory_resource cuda_mr;
+  auto mr = cudf::get_current_device_resource_ref();
 
   SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: concatenating edge columns");
   auto src_concat = cudf::concatenate(src_views, stream, cuda_mr);
@@ -75,9 +87,9 @@ void build_csr_if_needed(shared_ptr<CachedCSR>& csr, rmm::cuda_stream_view strea
 
   cudaMemsetAsync(degree_vec.data(), 0, num_vertices * sizeof(int64_t), stream.value());
   LaunchDegreeCountKernel(src_ptr, degree_vec.data(), num_edges, num_vertices);
-  LaunchPrefixScanKernel(degree_vec.data(), offsets_vec.data(), num_vertices);
+  LaunchPrefixScanKernel(degree_vec.data(), offsets_vec.data(), num_vertices, stream, mr);
   LaunchScatterKernel(
-    src_ptr, dst_ptr, offsets_vec.data(), indices_vec.data(), num_edges, num_vertices);
+    src_ptr, dst_ptr, offsets_vec.data(), indices_vec.data(), num_edges, num_vertices, stream, mr);
   cudaDeviceSynchronize();
   // degree_vec freed automatically here
 

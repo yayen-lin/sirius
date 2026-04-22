@@ -5,31 +5,51 @@
 #include "op/sirius_physical_operator.hpp"
 
 #include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
 
 #include <duckdb.hpp>
 
 /* forward declarations (src/cuda/operator/) */
 namespace duckdb {  // TODO: add more operators like multi-source bfs, SSSP, etc
 
-// simple edge traversal kernel
-void LaunchEdgeTraversalKernel(const int64_t* offsets,
-                               const int64_t* indices,
-                               const int64_t* source_ids,
-                               int64_t num_sources,
-                               int64_t*& out_node_ids,
-                               int64_t*& out_predecessor_ids,
-                               int64_t& out_count);
+// ---------------------------------------------------------------------------
+// Result structures for graph kernels (RAII-safe, integrates with Sirius memory management)
+// ---------------------------------------------------------------------------
+struct EdgeTraversalResult {
+  rmm::device_uvector<int64_t> node_ids;
+  rmm::device_uvector<int64_t> predecessor_ids;
 
-// breadth first search kernel
-void LaunchBFSKernel(const int64_t* csr_offsets,
-                     const int64_t* csr_indices,
-                     const int64_t* source_ids,
-                     int64_t num_sources,
-                     int64_t num_vertices,
-                     int64_t*& out_node_ids,
-                     int64_t*& out_distances,
-                     int64_t*& out_predecessors,
-                     int64_t& out_count);
+  EdgeTraversalResult(rmm::device_uvector<int64_t>&& nodes,
+                     rmm::device_uvector<int64_t>&& predecessors);
+};
+
+struct BFSResult {
+  rmm::device_uvector<int64_t> node_ids;
+  rmm::device_uvector<int64_t> distances;
+  rmm::device_uvector<int64_t> predecessors;
+
+  BFSResult(rmm::device_uvector<int64_t>&& nodes,
+           rmm::device_uvector<int64_t>&& dists,
+           rmm::device_uvector<int64_t>&& preds);
+};
+
+// ---------------------------------------------------------------------------
+// Graph kernel launchers (now RMM-enabled with stream support)
+// ---------------------------------------------------------------------------
+EdgeTraversalResult LaunchEdgeTraversalKernel(const int64_t* offsets,
+                                               const int64_t* indices,
+                                               const int64_t* source_ids,
+                                               int64_t num_sources,
+                                               rmm::cuda_stream_view stream,
+                                               rmm::device_async_resource_ref mr);
+
+BFSResult LaunchBFSKernel(const int64_t* csr_offsets,
+                          const int64_t* csr_indices,
+                          const int64_t* source_ids,
+                          int64_t num_sources,
+                          int64_t num_vertices,
+                          rmm::cuda_stream_view stream,
+                          rmm::device_async_resource_ref mr);
 }  // namespace duckdb
 
 namespace sirius::op {

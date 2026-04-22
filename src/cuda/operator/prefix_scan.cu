@@ -1,5 +1,8 @@
 #include <cuda_runtime.h>
 
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
+
 #include <vector>
 
 namespace duckdb {
@@ -70,28 +73,36 @@ __global__ void down_sweep_kernel(const int64_t* __restrict__ degree,
 //   Pass 1: reduce_kernel computes per-block sums
 //   Between passes: CPU exclusive scan of block_sums (small array)
 //   Pass 2: down_sweep_kernel uses scanned block sums as base offsets
+//
+//   Now uses RMM for memory management and stream-ordered execution.
 // ---------------------------------------------------------------------------
-void LaunchPrefixScanKernel(const int64_t* degree, int64_t* offsets, int64_t num_vertices)
+void LaunchPrefixScanKernel(const int64_t* degree,
+                            int64_t* offsets,
+                            int64_t num_vertices,
+                            rmm::cuda_stream_view stream,
+                            rmm::device_async_resource_ref mr)
 {
   if (num_vertices == 0) return;
 
   int64_t num_blocks = (num_vertices + SCAN_BLOCK_SIZE - 1) / SCAN_BLOCK_SIZE;
 
-  // Allocate block_sums with cudaMalloc — this is a small temporary buffer
-  // that must not go through the legacy GPU buffer manager (it has 0-byte budget
-  // when called from the graph pipeline).
-  int64_t* block_sums = nullptr;
-  cudaMalloc(&block_sums, num_blocks * sizeof(int64_t));
+  // Allocate block_sums with RMM — integrates with Sirius memory management
+  rmm::device_uvector<int64_t> block_sums(num_blocks, stream, mr);
 
   // --- Pass 1: per-block reduction ---
-  reduce_kernel<<<num_blocks, SCAN_BLOCK_SIZE>>>(degree, block_sums, num_vertices);
-  cudaDeviceSynchronize();
+  reduce_kernel<<<num_blocks, SCAN_BLOCK_SIZE, 0, stream.value()>>>(
+    degree, block_sums.data(), num_vertices);
 
   // --- Between passes: CPU exclusive scan of block_sums ---
   // block_sums is small (num_blocks entries), so CPU scan is fine here.
   // This is the inter-block prefix that gives each block its base offset.
   std::vector<int64_t> h_block_sums(num_blocks);
-  cudaMemcpy(h_block_sums.data(), block_sums, num_blocks * sizeof(int64_t), cudaMemcpyDeviceToHost);
+  cudaMemcpyAsync(h_block_sums.data(),
+                  block_sums.data(),
+                  num_blocks * sizeof(int64_t),
+                  cudaMemcpyDeviceToHost,
+                  stream.value());
+  stream.synchronize();  // Wait for D2H copy to complete before CPU scan
 
   std::vector<int64_t> h_block_sums_scanned(num_blocks);
   h_block_sums_scanned[0] = 0;
@@ -99,17 +110,20 @@ void LaunchPrefixScanKernel(const int64_t* degree, int64_t* offsets, int64_t num
     h_block_sums_scanned[i] = h_block_sums_scanned[i - 1] + h_block_sums[i - 1];
   }
 
-  cudaMemcpy(
-    block_sums, h_block_sums_scanned.data(), num_blocks * sizeof(int64_t), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(block_sums.data(),
+                  h_block_sums_scanned.data(),
+                  num_blocks * sizeof(int64_t),
+                  cudaMemcpyHostToDevice,
+                  stream.value());
 
   // --- Pass 2: down-sweep within each block using base offsets ---
   // offsets[0] = 0 enforced here before kernel writes offsets[1..num_vertices]
-  cudaMemset(offsets, 0, sizeof(int64_t));
+  cudaMemsetAsync(offsets, 0, sizeof(int64_t), stream.value());
 
-  down_sweep_kernel<<<num_blocks, SCAN_BLOCK_SIZE>>>(degree, block_sums, offsets, num_vertices);
-  cudaDeviceSynchronize();
+  down_sweep_kernel<<<num_blocks, SCAN_BLOCK_SIZE, 0, stream.value()>>>(
+    degree, block_sums.data(), offsets, num_vertices);
 
-  cudaFree(block_sums);
+  // block_sums freed automatically when device_uvector goes out of scope
 }
 
 

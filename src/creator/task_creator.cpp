@@ -16,6 +16,8 @@
 
 #include "creator/task_creator.hpp"
 
+#include "graph/GPUGraphTraversalOperator.hpp"
+#include "graph/graph_traversal_task.hpp"
 #include "log/logging.hpp"
 #include "op/scan/duckdb_scan_executor.hpp"
 #include "op/scan/duckdb_scan_task.hpp"
@@ -395,11 +397,23 @@ void task_creator::manager_loop()
 
             auto local_state =
               std::make_unique<pipeline::gpu_pipeline_task_local_state>(std::move(input_data));
-            auto task =
-              std::make_unique<pipeline::gpu_pipeline_task>(get_next_task_id(),
-                                                            destination_data_repositories,
-                                                            std::move(local_state),
-                                                            gpu_pipeline_task_global_state);
+
+            // Create specialized task for graph traversal operators
+            std::unique_ptr<pipeline::gpu_pipeline_task> task;
+            if (node->type == ::sirius::op::SiriusPhysicalOperatorType::GRAPH_TRAVERSAL) {
+              auto& traversal_op = node->Cast<op::GPUGraphTraversalOperator>();
+              task               = std::make_unique<graph::graph_traversal_task>(
+                get_next_task_id(),
+                destination_data_repositories,
+                std::move(local_state),
+                gpu_pipeline_task_global_state,
+                traversal_op.csr);
+            } else {
+              task = std::make_unique<pipeline::gpu_pipeline_task>(get_next_task_id(),
+                                                                    destination_data_repositories,
+                                                                    std::move(local_state),
+                                                                    gpu_pipeline_task_global_state);
+            }
             _pipeline_executor->schedule(std::move(task));
           }
         }

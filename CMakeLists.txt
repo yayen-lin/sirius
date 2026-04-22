@@ -242,6 +242,7 @@ set(EXTENSION_SOURCES
     src/graph/GraphQueryParser.cpp
     src/graph/GPUCSRConstructionOperator.cpp
     src/graph/GPUGraphTraversalOperator.cpp
+    src/graph/graph_traversal_task.cpp
 )
 
 # Legacy Sirius — all config lives in src/legacy/CMakeLists.txt.
@@ -279,6 +280,7 @@ set(CUDA_SOURCES
     src/cuda/operator/bfs.cu
     src/cuda/operator/degree_count.cu
     src/cuda/operator/edge_traversal.cu
+    src/cuda/operator/fill_kernel.cu
     src/cuda/operator/prefix_scan.cu
     src/cuda/operator/scatter_kernel.cu
     src/cuda/print.cu

@@ -6,9 +6,10 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/device_buffer.hpp>
-#include <rmm/mr/cuda_memory_resource.hpp>
+#include <rmm/device_uvector.hpp>
 
 #include <cuda_runtime.h>
 
@@ -101,51 +102,45 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   const auto& src_ids    = parsed.sourceLiteralIDs();
   const auto num_sources = static_cast<int64_t>(src_ids.size());
 
-  static rmm::mr::cuda_memory_resource cuda_mr;
-  rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, &cuda_mr);
+  auto mr = cudf::get_current_device_resource_ref();
+  rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, mr);
   auto* d_source_ids = static_cast<int64_t*>(d_source_buf.data());
 
-  int64_t* result_node_ids        = nullptr;
-  int64_t* result_predecessor_ids = nullptr;
-  int64_t result_count            = 0;
-  LaunchEdgeTraversalKernel(csr->offsets.data(),
-                            csr->indices.data(),
-                            d_source_ids,
-                            num_sources,
-                            result_node_ids,
-                            result_predecessor_ids,
-                            result_count);
+  // Launch kernel - returns device_uvectors (cucascade-managed memory)
+  auto result = LaunchEdgeTraversalKernel(
+    csr->offsets.data(), csr->indices.data(), d_source_ids, num_sources, stream, mr);
 
+  const int64_t result_count = result.node_ids.size();
   std::vector<std::unique_ptr<cudf::column>> columns;
-  std::vector<int64_t> h_ones(result_count, 1);  // constant distance=1 buffer for edge traversal
+
+  // Create distance buffer filled with 1s (edge traversal is always distance=1)
+  rmm::device_uvector<int64_t> distance_ones(result_count, stream, mr);
+  LaunchFillKernel(distance_ones.data(), 1, result_count, stream);
 
   for (const auto& col_name : parsed.output_columns) {
     if (col_name == "predecessor") {
       columns.push_back(std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT64},
         result_count,
-        rmm::device_buffer(result_predecessor_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer(result.predecessor_ids.release(), stream, mr),
         rmm::device_buffer{},
         0));
     } else if (col_name == "distance") {
       columns.push_back(std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT64},
         result_count,
-        rmm::device_buffer(h_ones.data(), result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer(distance_ones.release(), stream, mr),
         rmm::device_buffer{},
         0));
     } else {
       columns.push_back(std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT64},
         result_count,
-        rmm::device_buffer(result_node_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer(result.node_ids.release(), stream, mr),
         rmm::device_buffer{},
         0));
     }
   }
-
-  cudaFree(result_node_ids);
-  cudaFree(result_predecessor_ids);
 
   auto result_table = std::make_unique<cudf::table>(std::move(columns));
   auto batch        = sirius::make_data_batch(std::move(result_table), *_gpu_memory_space);
@@ -171,23 +166,20 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
   const auto& src_ids    = parsed.sourceLiteralIDs();
   const auto num_sources = static_cast<int64_t>(src_ids.size());
 
-  static rmm::mr::cuda_memory_resource cuda_mr;
-  rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, &cuda_mr);
+  auto mr = cudf::get_current_device_resource_ref();
+  rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, mr);
   auto* d_source_ids = static_cast<int64_t*>(d_source_buf.data());
 
-  int64_t* result_node_ids        = nullptr;
-  int64_t* result_distances       = nullptr;
-  int64_t* result_predecessor_ids = nullptr;
-  int64_t result_count            = 0;
-  LaunchBFSKernel(csr->offsets.data(),
-                  csr->indices.data(),
-                  d_source_ids,
-                  num_sources,
-                  csr->num_vertices,
-                  result_node_ids,
-                  result_distances,
-                  result_predecessor_ids,
-                  result_count);
+  // Launch kernel - returns device_uvectors (cucascade-managed memory)
+  auto result = LaunchBFSKernel(csr->offsets.data(),
+                                csr->indices.data(),
+                                d_source_ids,
+                                num_sources,
+                                csr->num_vertices,
+                                stream,
+                                mr);
+
+  const int64_t result_count = result.node_ids.size();
 
   // Emit columns in the order declared in COLUMNS (...), using output_columns names.
   std::vector<std::unique_ptr<cudf::column>> columns;
@@ -197,29 +189,25 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
       columns.push_back(std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT64},
         result_count,
-        rmm::device_buffer(result_distances, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer(result.distances.release(), stream, mr),
         rmm::device_buffer{},
         0));
     } else if (col_name == "predecessor") {
       columns.push_back(std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT64},
         result_count,
-        rmm::device_buffer(result_predecessor_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer(result.predecessors.release(), stream, mr),
         rmm::device_buffer{},
         0));
     } else {
       columns.push_back(std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT64},
         result_count,
-        rmm::device_buffer(result_node_ids, result_count * sizeof(int64_t), stream, &cuda_mr),
+        rmm::device_buffer(result.node_ids.release(), stream, mr),
         rmm::device_buffer{},
         0));
     }
   }
-
-  cudaFree(result_node_ids);
-  cudaFree(result_distances);
-  cudaFree(result_predecessor_ids);
 
   auto result_table = std::make_unique<cudf::table>(std::move(columns));
   auto batch        = sirius::make_data_batch(std::move(result_table), *_gpu_memory_space);

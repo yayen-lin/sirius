@@ -18,14 +18,22 @@ void LaunchDegreeCountKernel(const int64_t* src_col,
                              int64_t num_edges,
                              int64_t num_vertices);
 
-void LaunchPrefixScanKernel(const int64_t* degree, int64_t* offsets, int64_t num_vertices);
+void LaunchPrefixScanKernel(const int64_t* degree,
+                            int64_t* offsets,
+                            int64_t num_vertices,
+                            rmm::cuda_stream_view stream,
+                            rmm::device_async_resource_ref mr);
 
 void LaunchScatterKernel(const int64_t* src_col,
                          const int64_t* dst_col,
                          const int64_t* offsets,
                          int64_t* indices,
                          int64_t num_edges,
-                         int64_t num_vertices);
+                         int64_t num_vertices,
+                         rmm::cuda_stream_view stream,
+                         rmm::device_async_resource_ref mr);
+
+void LaunchFillKernel(int64_t* data, int64_t value, size_t n, rmm::cuda_stream_view stream);
 
 }  // namespace duckdb
 
