@@ -59,7 +59,13 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator
   if (!csr) { throw InternalException("GPUGraphTraversalOperator: CSR is null"); }
 
   // return cached result on subsequent calls
-  if (traversal_done && cached_result) { return std::make_unique<operator_data>(*cached_result); }
+  if (traversal_done && cached_result) {
+    auto* pipelineable = dynamic_cast<pipelineable_operator_data*>(cached_result.get());
+    if (!pipelineable) {
+      throw InternalException("cached_result is not pipelineable_operator_data");
+    }
+    return std::make_unique<pipelineable_operator_data>(*pipelineable);
+  }
 
   // build CSR here in execute() where a live pipeline-task reservation is held.
   build_csr_if_needed(csr, stream);
@@ -77,7 +83,12 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator
   }
 
   traversal_done = true;
-  cached_result  = std::make_unique<operator_data>(*result);
+  // Move result to preserve the derived pipelineable_operator_data type (avoid slicing)
+  auto* pipelineable = dynamic_cast<pipelineable_operator_data*>(result.get());
+  if (!pipelineable) {
+    throw InternalException("result is not pipelineable_operator_data");
+  }
+  cached_result = std::make_unique<pipelineable_operator_data>(*pipelineable);
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
