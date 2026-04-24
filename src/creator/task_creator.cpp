@@ -16,8 +16,8 @@
 
 #include "creator/task_creator.hpp"
 
-#include "graph/GPUGraphTraversalOperator.hpp"
-#include "graph/graph_traversal_task.hpp"
+#include "graph/sirius_graph_traversal_task.hpp"
+#include "graph/sirius_physical_graph_traversal.hpp"
 #include "log/logging.hpp"
 #include "op/scan/duckdb_scan_executor.hpp"
 #include "op/scan/duckdb_scan_task.hpp"
@@ -401,8 +401,8 @@ void task_creator::manager_loop()
             // Create specialized task for graph traversal operators
             std::unique_ptr<pipeline::gpu_pipeline_task> task;
             if (node->type == ::sirius::op::SiriusPhysicalOperatorType::GRAPH_TRAVERSAL) {
-              auto& traversal_op = node->Cast<op::GPUGraphTraversalOperator>();
-              task               = std::make_unique<graph::graph_traversal_task>(
+              auto& traversal_op = node->Cast<op::sirius_physical_graph_traversal>();
+              task               = std::make_unique<graph::sirius_graph_traversal_task>(
                 get_next_task_id(),
                 destination_data_repositories,
                 std::move(local_state),

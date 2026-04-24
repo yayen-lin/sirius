@@ -238,11 +238,11 @@ set(EXTENSION_SOURCES
     src/sirius_interface.cpp
     src/util/stream_check_wrapper.cpp
     src/util/segfault_backtrace_handler.cpp
-    src/graph/GraphQueryLexer.cpp
-    src/graph/GraphQueryParser.cpp
-    src/graph/GPUCSRConstructionOperator.cpp
-    src/graph/GPUGraphTraversalOperator.cpp
-    src/graph/graph_traversal_task.cpp
+    src/graph/sirius_graph_query_lexer.cpp
+    src/graph/sirius_graph_query_parser.cpp
+    src/graph/sirius_physical_csr_construction.cpp
+    src/graph/sirius_physical_graph_traversal.cpp
+    src/graph/sirius_graph_traversal_task.cpp
 )
 
 # Legacy Sirius — all config lives in src/legacy/CMakeLists.txt.

@@ -4,9 +4,9 @@
 
 namespace duckdb {
 
-// All token types the graph query lexer can produce
-enum class GQTokenType {
-  // Keywords
+// token types the graph query lexer can produce
+enum class sirius_graph_query_token_type {
+  // keywords
   MATCH,
   WHERE,
   COLUMNS,
@@ -14,7 +14,7 @@ enum class GQTokenType {
   ANY,
   SHORTEST,
 
-  // Symbols
+  // symbols
   LEFT_PAREN,     // (
   RIGHT_PAREN,    // )
   LEFT_BRACKET,   // [
@@ -24,7 +24,7 @@ enum class GQTokenType {
   DOT,            // .
   SEMICOLON,      // ;
 
-  // Operators
+  // operators
   ARROW_RIGHT,  // ->
   ARROW_LEFT,   // <-
   ARROW_STAR,   // ->*
@@ -34,7 +34,7 @@ enum class GQTokenType {
   STAR,         // *
   PLUS,         // +
 
-  // Literals
+  // literals
   IDENTIFIER,
   INTEGER,
 
@@ -42,12 +42,12 @@ enum class GQTokenType {
 };
 
 //  single token produced by lexer
-struct GQToken {
-  GQTokenType type;
+struct sirius_graph_query_token {
+  sirius_graph_query_token_type type;
   std::string lexeme;
   int line;
 
-  GQToken(const GQTokenType t, std::string lex, const int ln)
+  sirius_graph_query_token(const sirius_graph_query_token_type t, std::string lex, const int ln)
     : type(t), lexeme(std::move(lex)), line(ln)
   {
   }

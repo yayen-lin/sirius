@@ -7,17 +7,17 @@
 namespace duckdb {
 
 // source filter right now can either be a list of IDs or a subquery
-using SourceFilter = std::variant<std::vector<int64_t>, std::string>;
+using sirius_source_filter = std::variant<std::vector<int64_t>, std::string>;
 
-enum class EdgeDirection { RIGHT, LEFT, BOTH };
-enum class PathPattern {
+enum class sirius_edge_direction { RIGHT, LEFT, BOTH };
+enum class sirius_path_pattern {
   DIRECT,       // -[]->
   ONE_OR_MORE,  // ->+
   ZERO_OR_MORE  // ->*
 };
-enum class OperationType { EDGE_TRAVERSAL, BFS, UNWEIGHTED_SHORTEST_PATH, WEIGHTED_SHORTEST_PATH };
+enum class sirius_operation_type { EDGE_TRAVERSAL, BFS, UNWEIGHTED_SHORTEST_PATH, WEIGHTED_SHORTEST_PATH };
 
-struct ParsedGraphQuery {
+struct sirius_parsed_graph_query {
   // vertex tables
   std::string src_table;
   std::string src_alias;
@@ -31,17 +31,17 @@ struct ParsedGraphQuery {
   std::string edge_dst_col;
 
   // source filter
-  SourceFilter source_filter;
+  sirius_source_filter source_filter;
   bool has_source_filter = false;
 
   // destination filter
-  SourceFilter dest_filter;
+  sirius_source_filter dest_filter;
   bool has_dest_filter = false;
 
   // graph operation
-  OperationType op         = OperationType::EDGE_TRAVERSAL;
-  EdgeDirection direction  = EdgeDirection::RIGHT;
-  PathPattern path_pattern = PathPattern::DIRECT;
+  sirius_operation_type op         = sirius_operation_type::EDGE_TRAVERSAL;
+  sirius_edge_direction direction  = sirius_edge_direction::RIGHT;
+  sirius_path_pattern path_pattern = sirius_path_pattern::DIRECT;
 
   // result
   std::vector<std::string> output_columns;

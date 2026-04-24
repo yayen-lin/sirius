@@ -22,7 +22,7 @@
 #include "gpu_columns.hpp"
 #include "helper/common.h"
 #include "utils.hpp"
-#include "graph/CachedCSR.hpp"
+#include "graph/sirius_cached_csr.hpp"
 
 namespace duckdb {
 
@@ -147,7 +147,7 @@ class GPUBufferManager {
   // pointer, size, and the gpu id
   vector<map<void*, uint64_t>> allocation_table;
   vector<map<void*, uint64_t>> locked_allocation_table;
-  map<string, shared_ptr<CachedCSR>> csr_cache;
+  map<string, shared_ptr<sirius_cached_csr>> csr_cache;
 
  private:
   // Private constructor

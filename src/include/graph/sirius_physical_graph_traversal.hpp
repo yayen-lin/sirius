@@ -1,7 +1,7 @@
 #pragma once
 
-#include "graph/CachedCSR.hpp"
-#include "graph/ParsedGraphQuery.hpp"
+#include "graph/sirius_cached_csr.hpp"
+#include "graph/sirius_parsed_graph_query.hpp"
 #include "op/sirius_physical_operator.hpp"
 
 #include <rmm/cuda_stream_view.hpp>
@@ -12,9 +12,7 @@
 /* forward declarations (src/cuda/operator/) */
 namespace duckdb {  // TODO: add more operators like multi-source bfs, SSSP, etc
 
-// ---------------------------------------------------------------------------
-// Result structures for graph kernels (RAII-safe, integrates with Sirius memory management)
-// ---------------------------------------------------------------------------
+// result structures for graph kernels (RAII-safe, integrates with Sirius memory management)
 struct EdgeTraversalResult {
   rmm::device_uvector<int64_t> node_ids;
   rmm::device_uvector<int64_t> predecessor_ids;
@@ -33,9 +31,7 @@ struct BFSResult {
            rmm::device_uvector<int64_t>&& preds);
 };
 
-// ---------------------------------------------------------------------------
-// Graph kernel launchers (now RMM-enabled with stream support)
-// ---------------------------------------------------------------------------
+// graph kernel launchers
 EdgeTraversalResult LaunchEdgeTraversalKernel(const int64_t* offsets,
                                                const int64_t* indices,
                                                const int64_t* source_ids,
@@ -54,15 +50,15 @@ BFSResult LaunchBFSKernel(const int64_t* csr_offsets,
 
 namespace sirius::op {
 
-class GPUGraphTraversalOperator : public sirius_physical_operator {
+class sirius_physical_graph_traversal : public sirius_physical_operator {
  public:
   static constexpr auto TYPE = SiriusPhysicalOperatorType::GRAPH_TRAVERSAL;
 
-  GPUGraphTraversalOperator(duckdb::vector<duckdb::LogicalType> types,
-                            const duckdb::ParsedGraphQuery& parsed,
-                            duckdb::shared_ptr<duckdb::CachedCSR> csr,
-                            duckdb::idx_t estimated_cardinality,
-                            cucascade::memory::memory_space& gpu_memory_space);
+  sirius_physical_graph_traversal(duckdb::vector<duckdb::LogicalType> types,
+                                  const duckdb::sirius_parsed_graph_query& parsed,
+                                  duckdb::shared_ptr<duckdb::sirius_cached_csr> csr,
+                                  duckdb::idx_t estimated_cardinality,
+                                  cucascade::memory::memory_space& gpu_memory_space);
 
   std::unique_ptr<operator_data> execute(const operator_data& input_data,
                                          rmm::cuda_stream_view stream) override;
@@ -70,10 +66,10 @@ class GPUGraphTraversalOperator : public sirius_physical_operator {
   std::string params_to_string() const override;
 
   // parsed query (includes op type, source filter, output columns)
-  duckdb::ParsedGraphQuery parsed;
+  duckdb::sirius_parsed_graph_query parsed;
 
-  // CSR shared from GPUCSRConstructionOperator
-  duckdb::shared_ptr<duckdb::CachedCSR> csr;
+  // CSR shared from sirius_physical_csr_construction
+  duckdb::shared_ptr<duckdb::sirius_cached_csr> csr;
 
  private:
   std::unique_ptr<operator_data> RunEdgeTraversal(rmm::cuda_stream_view stream) const;

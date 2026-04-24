@@ -1,7 +1,7 @@
 #pragma once
 
-#include "graph/CachedCSR.hpp"
-#include "graph/ParsedGraphQuery.hpp"
+#include "graph/sirius_cached_csr.hpp"
+#include "graph/sirius_parsed_graph_query.hpp"
 #include "op/sirius_physical_operator.hpp"
 
 #include <rmm/cuda_stream_view.hpp>
@@ -40,16 +40,16 @@ void LaunchFillKernel(int64_t* data, int64_t value, size_t n, rmm::cuda_stream_v
 namespace sirius::op {
 
 // Build the CSR from pending_batches inside csr if not yet built
-void build_csr_if_needed(duckdb::shared_ptr<duckdb::CachedCSR>& csr, rmm::cuda_stream_view stream);
+void build_csr_if_needed(duckdb::shared_ptr<duckdb::sirius_cached_csr>& csr, rmm::cuda_stream_view stream);
 
-class GPUCSRConstructionOperator : public sirius_physical_operator {
+class sirius_physical_csr_construction : public sirius_physical_operator {
  public:
   static constexpr auto TYPE = SiriusPhysicalOperatorType::CSR_CONSTRUCTION;
 
-  GPUCSRConstructionOperator(duckdb::vector<duckdb::LogicalType> types,
-                             const duckdb::ParsedGraphQuery& parsed,
-                             duckdb::idx_t estimated_cardinality,
-                             cucascade::memory::memory_space& gpu_memory_space);
+  sirius_physical_csr_construction(duckdb::vector<duckdb::LogicalType> types,
+                                   const duckdb::sirius_parsed_graph_query& parsed,
+                                   duckdb::idx_t estimated_cardinality,
+                                   cucascade::memory::memory_space& gpu_memory_space);
 
   std::unique_ptr<operator_data> execute(const operator_data& input_data,
                                          rmm::cuda_stream_view stream) override;
@@ -63,10 +63,10 @@ class GPUCSRConstructionOperator : public sirius_physical_operator {
   void build_pipelines(pipeline::sirius_pipeline& current,
                        pipeline::sirius_meta_pipeline& meta_pipeline) override;
 
-  duckdb::ParsedGraphQuery parsed;
+  duckdb::sirius_parsed_graph_query parsed;
 
-  // shared with GPUGraphTraversalOperator; traversal calls build_csr_if_needed() on it
-  mutable duckdb::shared_ptr<duckdb::CachedCSR> csr;
+  // shared with sirius_physical_graph_traversal; traversal calls build_csr_if_needed() on it
+  mutable duckdb::shared_ptr<duckdb::sirius_cached_csr> csr;
 
  private:
   cucascade::memory::memory_space* _gpu_memory_space = nullptr;

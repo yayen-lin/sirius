@@ -1,7 +1,7 @@
-#include "graph/GPUGraphTraversalOperator.hpp"
-#include "graph/GPUCSRConstructionOperator.hpp"  // for build_csr_if_needed
+#include "graph/sirius_physical_graph_traversal.hpp"
 
 #include "data/data_batch_utils.hpp"
+#include "graph/sirius_physical_csr_construction.hpp"  // for build_csr_if_needed
 #include "log/logging.hpp"
 
 #include <cudf/column/column_factories.hpp>
@@ -22,10 +22,10 @@ namespace sirius::op {
 
 using namespace duckdb;
 
-GPUGraphTraversalOperator::GPUGraphTraversalOperator(
+sirius_physical_graph_traversal::sirius_physical_graph_traversal(
   vector<LogicalType> types,
-  const ParsedGraphQuery& parsed,
-  shared_ptr<CachedCSR> csr,
+  const sirius_parsed_graph_query& parsed,
+  shared_ptr<sirius_cached_csr> csr,
   idx_t estimated_cardinality,
   cucascade::memory::memory_space& gpu_memory_space)
   : sirius_physical_operator(
@@ -36,14 +36,14 @@ GPUGraphTraversalOperator::GPUGraphTraversalOperator(
 {
 }
 
-std::string GPUGraphTraversalOperator::params_to_string() const
+std::string sirius_physical_graph_traversal::params_to_string() const
 {
   string op_str;
   switch (parsed.op) {
-    case OperationType::EDGE_TRAVERSAL: op_str = "EDGE_TRAVERSAL"; break;
-    case OperationType::BFS: op_str = "BFS"; break;
-    case OperationType::UNWEIGHTED_SHORTEST_PATH: op_str = "SHORTEST_PATH"; break;
-    case OperationType::WEIGHTED_SHORTEST_PATH: op_str = "WEIGHTED_SHORTEST_PATH"; break;
+    case sirius_operation_type::EDGE_TRAVERSAL: op_str = "EDGE_TRAVERSAL"; break;
+    case sirius_operation_type::BFS: op_str = "BFS"; break;
+    case sirius_operation_type::UNWEIGHTED_SHORTEST_PATH: op_str = "SHORTEST_PATH"; break;
+    case sirius_operation_type::WEIGHTED_SHORTEST_PATH: op_str = "WEIGHTED_SHORTEST_PATH"; break;
   }
   string sources_str =
     parsed.has_source_filter ? std::to_string(parsed.sourceLiteralIDs().size()) : "all";
@@ -51,12 +51,12 @@ std::string GPUGraphTraversalOperator::params_to_string() const
   return " [op=" + op_str + ", sources=" + sources_str + "]";
 }
 
-std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator_data& input_data,
-                                                                  rmm::cuda_stream_view stream)
+std::unique_ptr<operator_data> sirius_physical_graph_traversal::execute(
+  const operator_data& input_data, rmm::cuda_stream_view stream)
 {
-  SIRIUS_LOG_DEBUG("[GRAPH] GPUGraphTraversalOperator::execute() called, traversal_done={}",
-                  traversal_done);
-  if (!csr) { throw InternalException("GPUGraphTraversalOperator: CSR is null"); }
+  SIRIUS_LOG_DEBUG("[GRAPH] sirius_physical_graph_traversal::execute() called, traversal_done={}",
+                   traversal_done);
+  if (!csr) { throw InternalException("sirius_physical_graph_traversal: CSR is null"); }
 
   // return cached result on subsequent calls
   if (traversal_done && cached_result) { return std::make_unique<operator_data>(*cached_result); }
@@ -69,10 +69,10 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator
   std::unique_ptr<operator_data> result;
 
   switch (parsed.op) {
-    case OperationType::EDGE_TRAVERSAL: result = RunEdgeTraversal(stream); break;
-    case OperationType::BFS:
-    case OperationType::UNWEIGHTED_SHORTEST_PATH: result = RunBFS(stream); break;
-    case OperationType::WEIGHTED_SHORTEST_PATH:
+    case sirius_operation_type::EDGE_TRAVERSAL: result = RunEdgeTraversal(stream); break;
+    case sirius_operation_type::BFS:
+    case sirius_operation_type::UNWEIGHTED_SHORTEST_PATH: result = RunBFS(stream); break;
+    case sirius_operation_type::WEIGHTED_SHORTEST_PATH:
       throw NotImplementedException("Weighted shortest path not yet implemented");
   }
 
@@ -81,22 +81,23 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::execute(const operator
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  SIRIUS_LOG_DEBUG("GPUGraphTraversalOperator traversal time: {:.2f} ms", duration.count() / 1000.0);
+  SIRIUS_LOG_DEBUG("sirius_physical_graph_traversal traversal time: {:.2f} ms",
+                   duration.count() / 1000.0);
 
   return result;
 }
 
-std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
+std::unique_ptr<operator_data> sirius_physical_graph_traversal::RunEdgeTraversal(
   rmm::cuda_stream_view stream) const
 {
   if (!parsed.has_source_filter) {
     throw NotImplementedException(
-      "GPUGraphTraversalOperator: edge traversal without source filter not yet supported");
+      "sirius_physical_graph_traversal: edge traversal without source filter not yet supported");
   }
 
   if (!parsed.sourceIsLiteralList()) {
     throw NotImplementedException(
-      "GPUGraphTraversalOperator: subquery source filter not yet supported");
+      "sirius_physical_graph_traversal: subquery source filter not yet supported");
   }
 
   const auto& src_ids    = parsed.sourceLiteralIDs();
@@ -106,14 +107,14 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, mr);
   auto* d_source_ids = static_cast<int64_t*>(d_source_buf.data());
 
-  // Launch kernel - returns device_uvectors (cucascade-managed memory)
+  // returns device_uvectors (cucascade-managed memory)
   auto result = LaunchEdgeTraversalKernel(
     csr->offsets.data(), csr->indices.data(), d_source_ids, num_sources, stream, mr);
 
   const int64_t result_count = result.node_ids.size();
   std::vector<std::unique_ptr<cudf::column>> columns;
 
-  // Create distance buffer filled with 1s (edge traversal is always distance=1)
+  // distance buffer filled with 1s
   rmm::device_uvector<int64_t> distance_ones(result_count, stream, mr);
   LaunchFillKernel(distance_ones.data(), 1, result_count, stream);
 
@@ -126,19 +127,19 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
         rmm::device_buffer{},
         0));
     } else if (col_name == "distance") {
-      columns.push_back(std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::INT64},
-        result_count,
-        rmm::device_buffer(distance_ones.release(), stream, mr),
-        rmm::device_buffer{},
-        0));
+      columns.push_back(
+        std::make_unique<cudf::column>(cudf::data_type{cudf::type_id::INT64},
+                                       result_count,
+                                       rmm::device_buffer(distance_ones.release(), stream, mr),
+                                       rmm::device_buffer{},
+                                       0));
     } else {
-      columns.push_back(std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::INT64},
-        result_count,
-        rmm::device_buffer(result.node_ids.release(), stream, mr),
-        rmm::device_buffer{},
-        0));
+      columns.push_back(
+        std::make_unique<cudf::column>(cudf::data_type{cudf::type_id::INT64},
+                                       result_count,
+                                       rmm::device_buffer(result.node_ids.release(), stream, mr),
+                                       rmm::device_buffer{},
+                                       0));
     }
   }
 
@@ -151,16 +152,17 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunEdgeTraversal(
   return std::make_unique<pipelineable_operator_data>(std::move(batches));
 }
 
-std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_stream_view stream) const
+std::unique_ptr<operator_data> sirius_physical_graph_traversal::RunBFS(
+  rmm::cuda_stream_view stream) const
 {
   if (!parsed.has_source_filter) {
     throw NotImplementedException(
-      "GPUGraphTraversalOperator: BFS without source filter not yet supported");
+      "sirius_physical_graph_traversal: BFS without source filter not yet supported");
   }
 
   if (!parsed.sourceIsLiteralList()) {
     throw NotImplementedException(
-      "GPUGraphTraversalOperator: subquery source filter not yet supported");
+      "sirius_physical_graph_traversal: subquery source filter not yet supported");
   }
 
   const auto& src_ids    = parsed.sourceLiteralIDs();
@@ -170,7 +172,7 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
   rmm::device_buffer d_source_buf(src_ids.data(), num_sources * sizeof(int64_t), stream, mr);
   auto* d_source_ids = static_cast<int64_t*>(d_source_buf.data());
 
-  // Launch kernel - returns device_uvectors (cucascade-managed memory)
+  // returns device_uvectors (cucascade-managed memory)
   auto result = LaunchBFSKernel(csr->offsets.data(),
                                 csr->indices.data(),
                                 d_source_ids,
@@ -186,12 +188,12 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
 
   for (const auto& col_name : parsed.output_columns) {
     if (col_name == "distance") {
-      columns.push_back(std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::INT64},
-        result_count,
-        rmm::device_buffer(result.distances.release(), stream, mr),
-        rmm::device_buffer{},
-        0));
+      columns.push_back(
+        std::make_unique<cudf::column>(cudf::data_type{cudf::type_id::INT64},
+                                       result_count,
+                                       rmm::device_buffer(result.distances.release(), stream, mr),
+                                       rmm::device_buffer{},
+                                       0));
     } else if (col_name == "predecessor") {
       columns.push_back(std::make_unique<cudf::column>(
         cudf::data_type{cudf::type_id::INT64},
@@ -200,12 +202,12 @@ std::unique_ptr<operator_data> GPUGraphTraversalOperator::RunBFS(rmm::cuda_strea
         rmm::device_buffer{},
         0));
     } else {
-      columns.push_back(std::make_unique<cudf::column>(
-        cudf::data_type{cudf::type_id::INT64},
-        result_count,
-        rmm::device_buffer(result.node_ids.release(), stream, mr),
-        rmm::device_buffer{},
-        0));
+      columns.push_back(
+        std::make_unique<cudf::column>(cudf::data_type{cudf::type_id::INT64},
+                                       result_count,
+                                       rmm::device_buffer(result.node_ids.release(), stream, mr),
+                                       rmm::device_buffer{},
+                                       0));
     }
   }
 
