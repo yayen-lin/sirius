@@ -1,7 +1,7 @@
 #include "graph/sirius_physical_graph_traversal.hpp"
 
 #include "data/data_batch_utils.hpp"
-#include "graph/sirius_physical_csr_construction.hpp"  // for build_csr_if_needed
+#include "graph/sirius_physical_csr_construction.hpp"
 #include "log/logging.hpp"
 
 #include <cudf/column/column_factories.hpp>
@@ -58,13 +58,14 @@ std::unique_ptr<operator_data> sirius_physical_graph_traversal::execute(
                    traversal_done);
   if (!csr) { throw InternalException("sirius_physical_graph_traversal: CSR is null"); }
 
-  // return cached result on subsequent calls
-  if (traversal_done && cached_result) {
-    auto* pipelineable = dynamic_cast<pipelineable_operator_data*>(cached_result.get());
-    if (!pipelineable) {
-      throw InternalException("cached_result is not pipelineable_operator_data");
-    }
-    return std::make_unique<pipelineable_operator_data>(*pipelineable);
+  // return empty result on redundant calls to prevent duplicate output rows
+  // (CSR construction may output multiple trigger batches in non-cached path)
+  if (traversal_done) {
+    SIRIUS_LOG_DEBUG(
+      "[GRAPH] sirius_physical_graph_traversal::execute() pipeline cleanup after traversal "
+      "complete");
+    return std::make_unique<pipelineable_operator_data>(
+      std::vector<std::shared_ptr<::cucascade::data_batch>>{});
   }
 
   // build CSR here in execute() where a live pipeline-task reservation is held.
@@ -83,12 +84,6 @@ std::unique_ptr<operator_data> sirius_physical_graph_traversal::execute(
   }
 
   traversal_done = true;
-  // Move result to preserve the derived pipelineable_operator_data type (avoid slicing)
-  auto* pipelineable = dynamic_cast<pipelineable_operator_data*>(result.get());
-  if (!pipelineable) {
-    throw InternalException("result is not pipelineable_operator_data");
-  }
-  cached_result = std::make_unique<pipelineable_operator_data>(*pipelineable);
 
   auto end      = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);

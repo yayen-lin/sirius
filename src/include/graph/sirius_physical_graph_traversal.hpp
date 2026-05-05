@@ -78,11 +78,8 @@ class sirius_physical_graph_traversal : public sirius_physical_operator {
   // GPU memory for the constructed CSR
   mutable cucascade::memory::memory_space* _gpu_memory_space = nullptr;
 
-  // track if traversal has been executed
+  // track if traversal has been executed (prevents duplicate results from multiple trigger batches)
   mutable bool traversal_done = false;
-
-  // cached results from first execute() call
-  mutable std::unique_ptr<operator_data> cached_result;
 };
 
 }  // namespace sirius::op
