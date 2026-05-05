@@ -1,7 +1,7 @@
-#include <cuda_runtime.h>
-
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
+
+#include <cuda_runtime.h>
 
 namespace duckdb {
 
@@ -29,11 +29,8 @@ __global__ void scatter_kernel(const int64_t* __restrict__ src,
 
 // ---------------------------------------------------------------------------
 // LaunchScatterKernel
-//   Allocates a temporary write_cursors array (copy of offsets),
-//   launches the kernel, then frees write_cursors.
-//   offsets is left intact for the traversal operator.
-//
-//   Now uses RMM for memory management and stream-ordered execution.
+//   uses atomic scatter, sorted edges reduce atomic contention
+//   uses rmm and stream-ordered execution.
 // ---------------------------------------------------------------------------
 void LaunchScatterKernel(const int64_t* src,
                          const int64_t* dst,
@@ -46,7 +43,7 @@ void LaunchScatterKernel(const int64_t* src,
 {
   if (num_edges == 0) return;
 
-  // Allocate temporary write cursors with RMM — integrates with Sirius memory management
+  // allocate write cursors (copy of offsets for atomic updates)
   rmm::device_uvector<int64_t> write_cursors(num_vertices + 1, stream, mr);
   cudaMemcpyAsync(write_cursors.data(),
                   offsets,
@@ -57,10 +54,11 @@ void LaunchScatterKernel(const int64_t* src,
   constexpr int BLOCK_SIZE = 256;
   int64_t num_blocks       = (num_edges + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+  // atomic scatter
   scatter_kernel<<<num_blocks, BLOCK_SIZE, 0, stream.value()>>>(
     src, dst, write_cursors.data(), indices, num_edges);
 
-  // write_cursors freed automatically when device_uvector goes out of scope
+  // write_cursors freed automatically with rm
 }
 
 }  // namespace duckdb

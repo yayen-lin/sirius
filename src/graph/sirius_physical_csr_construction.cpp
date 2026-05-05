@@ -79,6 +79,14 @@ void build_csr_if_needed(shared_ptr<sirius_cached_csr>& csr, rmm::cuda_stream_vi
 
   SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: num_vertices={}", num_vertices);
 
+  // allocate sorted edge arrays via RMM for degree counting
+  rmm::device_uvector<int64_t> src_sorted(num_edges, stream);
+  rmm::device_uvector<int64_t> dst_sorted(num_edges, stream);
+
+  // sort edges by source vertex
+  SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: LaunchEdgeSortKernel");
+  LaunchEdgeSortKernel(src_ptr, dst_ptr, src_sorted.data(), dst_sorted.data(), num_edges, stream);
+
   // allocate CSR arrays via RMM (device_uvector owns the memory and frees it on destruction)
   rmm::device_uvector<int64_t> degree_vec(num_vertices, stream);
   rmm::device_uvector<int64_t> offsets_vec(num_vertices + 1, stream);
@@ -86,11 +94,11 @@ void build_csr_if_needed(shared_ptr<sirius_cached_csr>& csr, rmm::cuda_stream_vi
 
   cudaMemsetAsync(degree_vec.data(), 0, num_vertices * sizeof(int64_t), stream.value());
   SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: LaunchDegreeCountKernel");
-  LaunchDegreeCountKernel(src_ptr, degree_vec.data(), num_edges, num_vertices);
+  LaunchDegreeCountKernel(src_sorted.data(), degree_vec.data(), num_edges, num_vertices);
   SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: LaunchPrefixScanKernel");
   LaunchPrefixScanKernel(degree_vec.data(), offsets_vec.data(), num_vertices, stream, mr);
   SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: LaunchScatterKernel");
-  LaunchScatterKernel(src_ptr, dst_ptr, offsets_vec.data(), indices_vec.data(), num_edges, num_vertices, stream, mr);
+  LaunchScatterKernel(src_sorted.data(), dst_sorted.data(), offsets_vec.data(), indices_vec.data(), num_edges, num_vertices, stream, mr);
   SIRIUS_LOG_DEBUG("[GRAPH] build_csr_if_needed: cudaDeviceSynchronize");
   cudaDeviceSynchronize(); // degree_vec freed automatically here
 

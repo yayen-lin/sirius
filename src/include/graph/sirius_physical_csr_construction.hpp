@@ -13,6 +13,13 @@ namespace duckdb {
 
 int64_t LaunchFindMaxKernel(const int64_t* data, int64_t n);
 
+void LaunchEdgeSortKernel(const int64_t* src_in,
+                         const int64_t* dst_in,
+                         int64_t* src_out,
+                         int64_t* dst_out,
+                         int64_t num_edges,
+                         rmm::cuda_stream_view stream);
+
 void LaunchDegreeCountKernel(const int64_t* src_col,
                              int64_t* degree,
                              int64_t num_edges,

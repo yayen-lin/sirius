@@ -279,6 +279,7 @@ set(CUDA_SOURCES
     src/cuda/operator/empty_str_check.cu
     src/cuda/operator/bfs.cu
     src/cuda/operator/degree_count.cu
+    src/cuda/operator/edge_sort.cu
     src/cuda/operator/edge_traversal.cu
     src/cuda/operator/fill_kernel.cu
     src/cuda/operator/prefix_scan.cu

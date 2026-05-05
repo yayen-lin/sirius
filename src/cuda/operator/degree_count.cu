@@ -1,85 +1,64 @@
+#include <cuda_runtime.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/extrema.h>
 
-#include <cuda_runtime.h>
-
 namespace duckdb {
 
 // ---------------------------------------------------------------------------
-// degree_count_kernel
-//   Processes edges in tiles of the vertex range.
-//   Each block maintains a shared memory array covering only
-//   [tile_start, tile_start + TILE_SIZE) vertices.
-//   Edges whose src falls outside the current tile are ignored
-//   and picked up in a later pass.
+// degree_count_sorted_kernel
+//   Counts vertex degrees from a sorted src array in a single pass.
+//   Each thread checks if it's at a boundary and writes the count directly
 // ---------------------------------------------------------------------------
-static constexpr int64_t TILE_SIZE = 1024;  // vertices per tile - fits in shared mem
-static constexpr int BLOCK_SIZE    = 256;   // threads per block
+static constexpr int BLOCK_SIZE = 256;
 
-__global__ void degree_count_kernel(const int64_t* __restrict__ src,
-                                    int64_t* degree,
-                                    int64_t num_edges,
-                                    int64_t tile_start)
+__global__ void degree_count_sorted_kernel(const int64_t* __restrict__ src,
+                                           int64_t* degree,
+                                           int64_t num_edges)
 {
-  __shared__ unsigned long long shared_degree[TILE_SIZE];
-
-  // Initialize shared tile to zero
-  for (int i = threadIdx.x; i < TILE_SIZE; i += blockDim.x) {
-    shared_degree[i] = 0;
-  }
-  __syncthreads();
-
   int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (idx < num_edges) {
-    int64_t v     = src[idx];
-    int64_t local = v - tile_start;
-    if (local >= 0 && local < TILE_SIZE) {
-      atomicAdd(&shared_degree[local], static_cast<unsigned long long>(1));
-    }
-  }
-  __syncthreads();
+  if (idx >= num_edges) return;
 
-  // Flush shared tile back to global degree array
-  for (int i = threadIdx.x; i < TILE_SIZE; i += blockDim.x) {
-    if (shared_degree[i] > 0) {
-      atomicAdd(reinterpret_cast<unsigned long long*>(&degree[tile_start + i]), shared_degree[i]);
+  int64_t current_vertex = src[idx];
+
+  // boundary check, last occurrence of current_vertex
+  bool is_last = (idx == num_edges - 1) || (src[idx + 1] != current_vertex);
+
+  if (is_last) {
+    // find the first occurrence by scanning backwards
+    int64_t first = idx;
+    while (first > 0 && src[first - 1] == current_vertex) {
+      first--;
     }
+    int64_t count          = idx - first + 1;
+    degree[current_vertex] = count;
   }
 }
 
 // ---------------------------------------------------------------------------
 // LaunchDegreeCountKernel
-//   Iterates over vertex tiles. For each tile, launches one kernel pass
-//   over all edges. Edges outside the current tile are skipped by the kernel.
+//   assumes src array is already SORTED by source vertex.
+//   counts degrees in a single pass.
 // ---------------------------------------------------------------------------
 void LaunchDegreeCountKernel(const int64_t* src,
                              int64_t* degree,
                              int64_t num_edges,
                              int64_t num_vertices)
 {
-  // TODO: sort src/dst by src vertex before tiled degree counting
-  // to eliminate redundant edge scans per tile. Use CUB DeviceRadixSort.
-  // Currently O(num_tiles * num_edges); after sorting O(num_edges).
   if (num_edges == 0) return;
 
   cudaMemset(degree, 0, num_vertices * sizeof(int64_t));
 
   int64_t num_blocks = (num_edges + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  int64_t num_tiles  = (num_vertices + TILE_SIZE - 1) / TILE_SIZE;
+  degree_count_sorted_kernel<<<num_blocks, BLOCK_SIZE>>>(src, degree, num_edges);
 
-  for (int64_t tile = 0; tile < num_tiles; tile++) {
-    int64_t tile_start = tile * TILE_SIZE;
-    degree_count_kernel<<<num_blocks, BLOCK_SIZE>>>(src, degree, num_edges, tile_start);
-  }
   cudaDeviceSynchronize();
 }
 
 // ---------------------------------------------------------------------------
 // LaunchFindMaxKernel
-//   Returns the maximum value in a device int64_t array.
-//   Uses thrust on the CUDA execution policy; safe to call from .cu files.
-//   Allocates via thrust's CUB backend (cudaMalloc), not through RMM.
+//   Returns the maximum value in a device int64_t array with thrust
+//   Allocates via thrust's CUB backend (cudaMalloc), not through RMM
 // ---------------------------------------------------------------------------
 int64_t LaunchFindMaxKernel(const int64_t* data, int64_t n)
 {
