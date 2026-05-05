@@ -5,6 +5,12 @@
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
 
+#include <thrust/copy.h>
+#include <thrust/count.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/transform.h>
+
 #include <vector>
 
 namespace duckdb {
@@ -24,6 +30,23 @@ struct BFSResult {
 };
 
 static constexpr int64_t UNVISITED = -1;
+
+// ---------------------------------------------------------------------------
+// GPU stream compaction
+// ---------------------------------------------------------------------------
+struct is_visited_functor {
+  const int64_t* visited_ptr;
+  __device__ bool operator()(int64_t idx) const {
+    return visited_ptr[idx] != UNVISITED;
+  }
+};
+
+struct gather_functor {
+  const int64_t* source_ptr;
+  __device__ int64_t operator()(int64_t idx) const {
+    return source_ptr[idx];
+  }
+};
 
 // ---------------------------------------------------------------------------
 // bfs_init_kernel
@@ -174,34 +197,39 @@ BFSResult LaunchBFSKernel(const int64_t* csr_offsets,
     current_distance++;
   }
 
-  // --- Collect results - all vertices where visited != UNVISITED ---
-  // CPU-side collection for prototype correctness
-  // TODO: replace with GPU compaction kernel (stream compaction)
-  std::vector<int64_t> h_visited(num_vertices);
-  std::vector<int64_t> h_predecessor(num_vertices);
-  cudaMemcpyAsync(h_visited.data(), visited.data(), num_vertices * sizeof(int64_t), cudaMemcpyDeviceToHost, stream.value());
-  cudaMemcpyAsync(h_predecessor.data(), predecessor.data(), num_vertices * sizeof(int64_t), cudaMemcpyDeviceToHost, stream.value());
-  stream.synchronize();
+  // --- Collect results using GPU stream compaction ---
+  // Much faster than CPU-side filtering, keeping everything on GPU
 
-  std::vector<int64_t> h_node_ids, h_distances, h_predecessors;
-  for (int64_t v = 0; v < num_vertices; v++) {
-    if (h_visited[v] != UNVISITED) {
-      h_node_ids.push_back(v);
-      h_distances.push_back(h_visited[v]);
-      h_predecessors.push_back(h_predecessor[v]);
-    }
-  }
+  // Count visited nodes to size output buffers
+  auto counting_iter = thrust::make_counting_iterator<int64_t>(0);
+  int64_t out_count = thrust::count_if(thrust::cuda::par.on(stream.value()),
+                                       counting_iter,
+                                       counting_iter + num_vertices,
+                                       is_visited_functor{visited.data()});
 
-  int64_t out_count = static_cast<int64_t>(h_node_ids.size());
-
-  // Copy results back to GPU with RMM
+  // Allocate output arrays
   rmm::device_uvector<int64_t> out_node_ids(out_count, stream, mr);
   rmm::device_uvector<int64_t> out_distances(out_count, stream, mr);
   rmm::device_uvector<int64_t> out_predecessors(out_count, stream, mr);
 
-  cudaMemcpyAsync(out_node_ids.data(), h_node_ids.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice, stream.value());
-  cudaMemcpyAsync(out_distances.data(), h_distances.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice, stream.value());
-  cudaMemcpyAsync(out_predecessors.data(), h_predecessors.data(), out_count * sizeof(int64_t), cudaMemcpyHostToDevice, stream.value());
+  if (out_count > 0) {
+    // Compact node IDs (copy only visited nodes)
+    thrust::copy_if(thrust::cuda::par.on(stream.value()),
+                    counting_iter, counting_iter + num_vertices,
+                    out_node_ids.data(),
+                    is_visited_functor{visited.data()});
+
+    // Gather distances and predecessors for visited nodes
+    thrust::transform(thrust::cuda::par.on(stream.value()),
+                      out_node_ids.data(), out_node_ids.data() + out_count,
+                      out_distances.data(),
+                      gather_functor{visited.data()});
+
+    thrust::transform(thrust::cuda::par.on(stream.value()),
+                      out_node_ids.data(), out_node_ids.data() + out_count,
+                      out_predecessors.data(),
+                      gather_functor{predecessor.data()});
+  }
 
   // visited, predecessor, frontiers freed automatically
 
