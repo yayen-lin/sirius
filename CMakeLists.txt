@@ -72,6 +72,7 @@ endif()
 
 # Dependencies
 find_package(cudf REQUIRED CONFIG)
+find_package(cuvs REQUIRED CONFIG)
 find_package(spdlog REQUIRED CONFIG)
 find_package(yaml-cpp REQUIRED CONFIG)
 find_package(absl REQUIRED CONFIG)
@@ -269,6 +270,7 @@ set(EXTENSION_SOURCES
     src/op/sirius_physical_sort_sample.cpp
     src/op/sirius_physical_table_scan.cpp
     src/op/sirius_physical_top_n.cpp
+    src/op/sirius_physical_vss.cpp
     src/op/sirius_physical_ungrouped_aggregate.cpp
     src/parallel/task_executor.cpp
     src/pipeline/gpu_pipeline_executor.cpp
@@ -300,6 +302,7 @@ set(EXTENSION_SOURCES
     src/planner/sirius_plan_projection_utils.cpp
     src/planner/sirius_plan_recursive_cte.cpp
     src/planner/sirius_plan_top_n.cpp
+    src/planner/vss_pattern.cpp
     src/pin_table.cpp
     src/scan_manager/load_balancing_scan_batch_coalecer.cpp
     src/scan_manager/round_robin_strategy.cpp
@@ -332,7 +335,9 @@ set(CUDA_SOURCES
     src/cuda/scan/strings/dict_fsst.cu
     src/cuda/scan/strings/dictionary.cu
     src/cuda/scan/strings/fsst.cu
-    src/cuda/scan/strings/uncompressed.cu)
+    src/cuda/scan/strings/uncompressed.cu
+    src/cuda/vss/cudf_raft_interop.cu
+    src/cuda/vss/brute_force_search.cu)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/legacy/CMakeLists.txt")
   add_subdirectory(src/legacy)
   list(APPEND EXTENSION_SOURCES ${SIRIUS_LEGACY_SOURCES}
@@ -385,6 +390,7 @@ foreach(_target sirius_extension sirius_loadable_extension)
   target_link_libraries(
     ${_target}
     cudf::cudf
+    cuvs::cuvs
     rmm::rmm
     spdlog::spdlog
     cuCascade::cucascade
