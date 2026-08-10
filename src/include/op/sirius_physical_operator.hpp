@@ -92,6 +92,7 @@ enum class operator_data_type : uint8_t {
   PARTITIONED,
   GPU_SCAN,
   GPU_VALUES,
+  VECTOR_JOIN,
 };
 
 /**

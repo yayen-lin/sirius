@@ -97,6 +97,8 @@ extern "C" int cudaProfilerStop();
 #include "vss/distance_metric.hpp"
 #include "vss/ivf_flat_index.hpp"
 #include "vss/pinned_column.hpp"
+#include "vss/vector_join.hpp"
+#include "vss/vector_join_bind_data.hpp"
 #include "vss/vector_search.hpp"
 
 #include <cudf/utilities/default_stream.hpp>
@@ -1741,6 +1743,240 @@ static void SiriusVectorSearchFunction(ClientContext& context,
   state.reader->get_next_chunk(output);
 }
 
+// ---------------------------------------------------------------------------
+// sirius_knn_join(probe_table, probe_vec_col, corpus_table, corpus_vec_col, ...)
+// ---------------------------------------------------------------------------
+
+using sirius::vss::knn_join_bind_data;
+using sirius::vss::knn_join_mode;
+using sirius::vss::knn_join_request;
+using sirius::vss::knn_join_side;
+
+static knn_join_mode knn_join_mode_from_string(const std::string& mode)
+{
+  if (mode == "global") { return knn_join_mode::global_top_k; }
+  if (mode == "per_row" || mode == "per-row") { return knn_join_mode::per_row_top_k; }
+  if (mode == "threshold") { return knn_join_mode::threshold; }
+  throw BinderException("sirius_knn_join: join_mode must be one of 'global', 'per_row', "
+                        "'threshold', got '" +
+                        mode + "'");
+}
+
+// Resolve one side against the catalog: fill in its catalog/schema identity,
+// default its output columns to the full schema, validate the vector column and
+// return its dimensionality.
+static std::int64_t SiriusKnnJoinBindSide(ClientContext& context,
+                                          const char* side,
+                                          knn_join_side& ref,
+                                          const std::string& default_schema,
+                                          duckdb::vector<std::string>& out_names,
+                                          duckdb::vector<LogicalType>& out_types)
+{
+  auto const qname         = QualifiedName::Parse(ref.table);
+  std::string const schema = !qname.schema.empty() ? qname.schema : default_schema;
+  auto& entry_base =
+    Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, qname.catalog, schema, qname.name);
+  auto& entry             = entry_base.Cast<DuckTableEntry>();
+  ref.catalog             = entry.ParentCatalog().GetName();
+  ref.schema              = entry.ParentSchema().name;
+  ref.table               = entry.name;  // catalog-resolved (matches query-side derivation)
+  auto const& columns     = entry.GetColumns();
+  auto const schema_names = columns.GetColumnNames();
+  auto const schema_types = columns.GetColumnTypes();
+
+  auto type_of = [&](const std::string& col) -> const LogicalType& {
+    for (std::size_t i = 0; i < schema_names.size(); ++i) {
+      if (schema_names[i] == col) { return schema_types[i]; }
+    }
+    throw BinderException("sirius_knn_join: " + std::string(side) + " column '" + col +
+                          "' not found in table '" + ref.table + "'");
+  };
+
+  auto const& vec_type = type_of(ref.column);
+  if (vec_type.id() != LogicalTypeId::ARRAY ||
+      ArrayType::GetChildType(vec_type).id() != LogicalTypeId::FLOAT) {
+    throw BinderException("sirius_knn_join: " + std::string(side) + " column '" + ref.column +
+                          "' must be a FLOAT[N] array column");
+  }
+
+  // Default the projection to every base-table column, in schema order.
+  if (ref.output_columns.empty()) {
+    ref.output_columns.assign(schema_names.begin(), schema_names.end());
+  }
+  for (auto const& col : ref.output_columns) {
+    out_types.push_back(type_of(col));
+    out_names.push_back(col);
+  }
+  return static_cast<std::int64_t>(ArrayType::GetSize(vec_type));
+}
+
+static unique_ptr<FunctionData> SiriusKnnJoinBind(ClientContext& context,
+                                                  TableFunctionBindInput& input,
+                                                  vector<LogicalType>& return_types,
+                                                  vector<string>& names)
+{
+  auto result = make_uniq<knn_join_bind_data>();
+  auto& req   = result->req;
+
+  // Required params
+  if (input.inputs.size() < 4) {
+    throw BinderException(
+      "sirius_knn_join requires four positional arguments: probe_table, probe_vec_col, "
+      "corpus_table, corpus_vec_col");
+  }
+  for (auto const& arg : input.inputs) {
+    if (arg.IsNull()) {
+      throw BinderException("sirius_knn_join: positional arguments cannot be NULL");
+    }
+  }
+  req.probe.table   = input.inputs[0].ToString();
+  req.probe.column  = input.inputs[1].ToString();
+  req.corpus.table  = input.inputs[2].ToString();
+  req.corpus.column = input.inputs[3].ToString();
+
+  // Optional params
+  bool has_k                  = false;
+  bool has_mode               = false;
+  bool has_self_exclude       = false;
+  std::string mode_str        = "per_row";
+  std::string search_mode_str = "exact";
+  std::string schema_name     = "main";
+  for (auto& kv : input.named_parameters) {
+    auto const key = StringUtil::Lower(kv.first);
+    if (kv.second.IsNull()) {
+      throw BinderException("sirius_knn_join: named parameter '" + kv.first + "' cannot be NULL");
+    }
+    if (key == "k") {
+      req.k = kv.second.GetValue<int64_t>();
+      has_k = true;
+    } else if (key == "metric") {
+      req.metric = StringUtil::Lower(kv.second.ToString());
+    } else if (key == "join_mode") {
+      mode_str = StringUtil::Lower(kv.second.ToString());
+      has_mode = true;
+    } else if (key == "distance_threshold") {
+      req.distance_threshold = kv.second.GetValue<double>();
+      req.has_threshold      = true;
+    } else if (key == "search_mode") {
+      search_mode_str = StringUtil::Lower(kv.second.ToString());
+    } else if (key == "self_exclude") {
+      req.self_exclude = kv.second.GetValue<bool>();
+      has_self_exclude = true;
+    } else if (key == "n_probes") {
+      req.n_probes = kv.second.GetValue<int64_t>();
+    } else if (key == "probe_output_columns") {
+      for (auto const& c : ListValue::GetChildren(kv.second)) {
+        req.probe.output_columns.push_back(c.ToString());
+      }
+    } else if (key == "corpus_output_columns") {
+      for (auto const& c : ListValue::GetChildren(kv.second)) {
+        req.corpus.output_columns.push_back(c.ToString());
+      }
+    } else if (key == "schema_name") {
+      schema_name = kv.second.ToString();
+    }
+  }
+
+  // join_mode defaults to 'threshold' when only a threshold is given, 'per_row' otherwise.
+  req.mode = has_mode ? knn_join_mode_from_string(mode_str)
+                      : (req.has_threshold && !has_k ? knn_join_mode::threshold
+                                                     : knn_join_mode::per_row_top_k);
+  if (req.mode == knn_join_mode::threshold) {
+    if (!req.has_threshold) {
+      throw BinderException("sirius_knn_join: join_mode 'threshold' requires distance_threshold");
+    }
+    if (has_k) {
+      throw BinderException(
+        "sirius_knn_join: k is not allowed with join_mode 'threshold'; use join_mode 'per_row' or "
+        "'global' with distance_threshold to cap the number of pairs");
+    }
+  } else if (!has_k) {
+    throw BinderException("sirius_knn_join: join_mode '" + mode_str + "' requires k");
+  }
+  if (has_k && req.k <= 0) { throw BinderException("sirius_knn_join: k must be >= 1"); }
+  if (req.has_threshold && !(req.distance_threshold >= 0.0)) {
+    throw BinderException("sirius_knn_join: distance_threshold must be >= 0");
+  }
+  if (req.metric != "l2" && req.metric != "cosine") {
+    throw BinderException("sirius_knn_join: metric must be one of 'l2', 'cosine', got '" +
+                          req.metric + "'");
+  }
+  if (search_mode_str == "approx") {
+    req.use_index = true;
+  } else if (search_mode_str == "exact") {
+    req.use_index = false;
+  } else {
+    throw BinderException("sirius_knn_join: search_mode must be one of 'exact', 'approx', got '" +
+                          search_mode_str + "'");
+  }
+  if (req.n_probes < 0) { throw BinderException("sirius_knn_join: n_probes must be >= 0"); }
+
+  // Resolve both sides; probe columns come first in the output, then corpus, then distance.
+  duckdb::vector<std::string> probe_names, corpus_names;
+  duckdb::vector<LogicalType> probe_types, corpus_types;
+  auto const probe_dim =
+    SiriusKnnJoinBindSide(context, "probe", req.probe, schema_name, probe_names, probe_types);
+  auto const corpus_dim =
+    SiriusKnnJoinBindSide(context, "corpus", req.corpus, schema_name, corpus_names, corpus_types);
+  if (probe_dim != corpus_dim) {
+    throw BinderException("sirius_knn_join: probe column '" + req.probe.column + "' is FLOAT[" +
+                          std::to_string(probe_dim) + "] but corpus column '" + req.corpus.column +
+                          "' is FLOAT[" + std::to_string(corpus_dim) + "]");
+  }
+  req.dim       = probe_dim;
+  req.self_join = req.probe.catalog == req.corpus.catalog &&
+                  req.probe.schema == req.corpus.schema && req.probe.table == req.corpus.table;
+
+  // A self join defaults to excluding the pair a row forms with itself: it sits
+  // at distance 0, so in the top-k modes it would take a slot from a real
+  // neighbor. Nothing to exclude when the two sides are different tables.
+  if (!has_self_exclude) {
+    req.self_exclude = req.self_join;
+  } else if (req.self_exclude && !req.self_join) {
+    throw BinderException(
+      "sirius_knn_join: self_exclude requires the probe and corpus to be the same table");
+  }
+
+  // Both sides may carry the same column names; suffix duplicates so the
+  // result schema stays unambiguous.
+  auto emit = [&](const std::string& base, const LogicalType& type) {
+    std::string name = base;
+    for (std::size_t suffix = 1;; ++suffix) {
+      bool taken = false;
+      for (auto const& existing : names) {
+        if (existing == name) {
+          taken = true;
+          break;
+        }
+      }
+      if (!taken) { break; }
+      name = base + "_" + std::to_string(suffix);
+    }
+    names.push_back(name);
+    return_types.push_back(type);
+  };
+  for (std::size_t i = 0; i < probe_names.size(); ++i) {
+    emit(probe_names[i], probe_types[i]);
+  }
+  for (std::size_t i = 0; i < corpus_names.size(); ++i) {
+    emit(corpus_names[i], corpus_types[i]);
+  }
+  emit("distance", LogicalType::FLOAT);
+
+  result->output_types = sirius::from_duckdb_vec(return_types);
+  return std::move(result);
+}
+
+// sirius_knn_join never runs as a DuckDB table function: the Sirius plan
+// generator recognizes its LogicalGet and swaps in the GPU join operator.
+// Reaching this body means the query was not routed to Sirius.
+static void SiriusKnnJoinFunction(ClientContext&, TableFunctionInput&, DataChunk&)
+{
+  throw NotImplementedException(
+    "sirius_knn_join runs only under Sirius GPU execution; this query fell back to DuckDB. "
+    "Check that gpu_execution is enabled and that both tables are pinned on the GPU tier.");
+}
+
 void SiriusExtension::RegisterGPUFunctions(DatabaseInstance& instance)
 {
   auto transaction = CatalogTransaction::GetSystemTransaction(instance);
@@ -1853,6 +2089,27 @@ void SiriusExtension::RegisterGPUFunctions(DatabaseInstance& instance)
   vector_search.named_parameters["schema_name"]    = LogicalType::VARCHAR;
   CreateTableFunctionInfo vector_search_info(vector_search);
   catalog.CreateTableFunction(transaction, vector_search_info);
+
+  // sirius_knn_join(probe_table, probe_vec_col, corpus_table, corpus_vec_col, k =>,
+  // metric =>, join_mode =>, distance_threshold =>, search_mode =>, self_exclude =>,
+  // n_probes =>, probe_output_columns =>, corpus_output_columns =>, schema_name =>)
+  TableFunction knn_join(
+    "sirius_knn_join",
+    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+    SiriusKnnJoinFunction,
+    SiriusKnnJoinBind);
+  knn_join.named_parameters["k"]                    = LogicalType::BIGINT;
+  knn_join.named_parameters["metric"]               = LogicalType::VARCHAR;
+  knn_join.named_parameters["join_mode"]            = LogicalType::VARCHAR;
+  knn_join.named_parameters["distance_threshold"]   = LogicalType::DOUBLE;
+  knn_join.named_parameters["search_mode"]          = LogicalType::VARCHAR;
+  knn_join.named_parameters["self_exclude"]         = LogicalType::BOOLEAN;
+  knn_join.named_parameters["n_probes"]             = LogicalType::BIGINT;
+  knn_join.named_parameters["probe_output_columns"] = LogicalType::LIST(LogicalType::VARCHAR);
+  knn_join.named_parameters["corpus_output_columns"] = LogicalType::LIST(LogicalType::VARCHAR);
+  knn_join.named_parameters["schema_name"]           = LogicalType::VARCHAR;
+  CreateTableFunctionInfo knn_join_info(knn_join);
+  catalog.CreateTableFunction(transaction, knn_join_info);
 }
 
 static void SetUsePinMemory(ClientContext& context, SetScope scope, Value& parameter)

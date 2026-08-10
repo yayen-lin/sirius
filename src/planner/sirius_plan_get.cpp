@@ -91,6 +91,10 @@ sirius_physical_plan_generator::create_plan(duckdb::LogicalGet& op)
 {
   auto column_ids = op.GetColumnIds();
 
+  // sirius_knn_join is a Sirius-owned table function that exists to be recognized
+  // here: it never runs as a DuckDB table function.
+  if (op.function.name == "sirius_knn_join") { return create_plan_knn_join(op); }
+
   // Only GPU-route known table scan functions; all others (pragma, system catalog
   // functions, etc.) must fall back to CPU.
   static const std::unordered_set<std::string> kSupportedScanFunctions = {
