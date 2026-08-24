@@ -152,7 +152,8 @@ enum class SiriusPhysicalOperatorType : uint8_t {
   STREAMING_SINK,
   VECTOR_JOIN_SELECT,
   VECTOR_JOIN_REDUCE_LOCAL,
-  VECTOR_JOIN_MATERIALIZE
+  VECTOR_JOIN_MATERIALIZE,
+  VECTOR_THRESHOLD_JOIN
 };
 
 std::string SiriusPhysicalOperatorToString(SiriusPhysicalOperatorType type);
