@@ -119,6 +119,7 @@ std::string SiriusPhysicalOperatorToString(SiriusPhysicalOperatorType type)
     case SiriusPhysicalOperatorType::VECTOR_JOIN_SELECT: return "VECTOR_JOIN_SELECT";
     case SiriusPhysicalOperatorType::VECTOR_JOIN_REDUCE_LOCAL: return "VECTOR_JOIN_REDUCE_LOCAL";
     case SiriusPhysicalOperatorType::VECTOR_JOIN_MATERIALIZE: return "VECTOR_JOIN_MATERIALIZE";
+    case SiriusPhysicalOperatorType::VECTOR_THRESHOLD_JOIN: return "VECTOR_THRESHOLD_JOIN";
     case SiriusPhysicalOperatorType::INVALID: break;
   }
   return "INVALID";

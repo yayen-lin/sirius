@@ -343,6 +343,7 @@ set(EXTENSION_SOURCES
     src/op/sirius_physical_limit.cpp
     src/op/sirius_physical_merge_sort.cpp
     src/op/sirius_physical_nested_loop_join.cpp
+    src/op/sirius_physical_vector_threshold_join.cpp
     src/op/sirius_physical_operator.cpp
     src/op/sirius_physical_operator_type.cpp
     src/op/sirius_physical_order.cpp
@@ -374,6 +375,7 @@ set(EXTENSION_SOURCES
     src/planner/sirius_plan_aggregate.cpp
     src/planner/sirius_plan_column_data_get.cpp
     src/planner/sirius_plan_comparison_join.cpp
+    src/planner/sirius_plan_vector_threshold_join.cpp
     src/planner/sirius_plan_compressed_schema.cpp
     src/planner/sirius_plan_cte.cpp
     src/planner/sirius_plan_delim_get.cpp
@@ -697,6 +699,7 @@ set(TEST_SOURCES
     test/cpp/integration/test_gpu_execution_locality.cpp
     test/cpp/integration/test_gpu_execution_multi_format.cpp
     test/cpp/integration/test_gpu_execution_null_safe_join.cpp
+    test/cpp/integration/test_gpu_execution_vector_threshold_join.cpp
     test/cpp/integration/test_gpu_execution_order_nulls.cpp
     test/cpp/integration/test_gpu_execution_parquet_nulls.cpp
     test/cpp/integration/test_gpu_execution_semantic_cast_fallback.cpp
