@@ -33,11 +33,11 @@ report() {
     /^@@/  { block = substr($0, 3); next }
     /real/ { for (i=1;i<=NF;i++) if ($i=="real") t=$(i+1)
              n[block]++; sum[block]+=t; if (!(block in mn) || t<mn[block]) mn[block]=t }
-    END    { for (b in n) { split(b, a, " ")   # b = "engine metric"
+    END    { for (b in n) { split(b, a, " ")   # b = "engine metric k"
                idx = (a[1]=="duckdb") ? "HNSW" : "IVF-FLAT"
-               printf "%-8s %-8s %-8s %-9s %8.1f %8.1f\n",
-                      a[1], "ann", a[2], idx, 1000*mn[b], 1000*sum[b]/n[b] } }
-  ' | sort | { printf "\n%-8s %-8s %-8s %-9s %8s %8s\n" engine search metric index min_ms mean_ms; cat; }
+               printf "%-8s %-8s %-8s %-9s %4d %8.1f %8.1f\n",
+                      a[1], "ann", a[2], idx, a[3], 1000*mn[b], 1000*sum[b]/n[b] } }
+  ' | sort -k1,1 -k3,3 -k5,5n | { printf "\n%-8s %-8s %-8s %-9s %4s %8s %8s\n" engine search metric index k min_ms mean_ms; cat; }
 }
 
 {
@@ -49,15 +49,17 @@ echo "SELECT * FROM sirius_create_ann_index('base', 'vec', metric => 'cosine', i
 echo "SELECT count(*) FROM sirius_knn_search('base', 'vec', $Q, k => 10, metric => 'l2', use_index => true, n_probes => $NPROBES, output_columns => ['id']);"
 echo ".timer on"
 
-echo ".print @@sirius l2"
 for i in $(seq $REPS); do
+  echo ".print @@sirius l2 10"
   echo "SELECT count(*) FROM sirius_knn_search('base', 'vec', $Q, k => 10,  metric => 'l2', use_index => true, n_probes => $NPROBES, output_columns => ['id']);"
+  echo ".print @@sirius l2 100"
   echo "SELECT count(*) FROM sirius_knn_search('base', 'vec', $Q, k => 100, metric => 'l2', use_index => true, n_probes => $NPROBES, output_columns => ['id']);"
 done
 
-echo ".print @@sirius cosine"
 for i in $(seq $REPS); do
+  echo ".print @@sirius cosine 10"
   echo "SELECT count(*) FROM sirius_knn_search('base', 'vec', $Q, k => 10,  metric => 'cosine', use_index => true, n_probes => $NPROBES, output_columns => ['id']);"
+  echo ".print @@sirius cosine 100"
   echo "SELECT count(*) FROM sirius_knn_search('base', 'vec', $Q, k => 100, metric => 'cosine', use_index => true, n_probes => $NPROBES, output_columns => ['id']);"
 done
 echo ".timer off"
@@ -74,9 +76,10 @@ echo "SELECT count(*) FROM lance_vector_search('$LANCE', 'vec', $QL, k => 10, us
 echo ".timer on"
 
 # search
-echo ".print @@lance l2"
 for i in $(seq $REPS); do
+  echo ".print @@lance l2 10"
   echo "SELECT count(*) FROM lance_vector_search('$LANCE', 'vec', $QL, k => 10,  use_index => true, nprobs => $NPROBES);"
+  echo ".print @@lance l2 100"
   echo "SELECT count(*) FROM lance_vector_search('$LANCE', 'vec', $QL, k => 100, use_index => true, nprobs => $NPROBES);"
 done
 echo ".timer off"
@@ -91,9 +94,10 @@ echo "SELECT count(*) FROM lance_vector_search('$LANCE_COS', 'vec', $QN, k => 10
 echo ".timer on"
 
 # search
-echo ".print @@lance cosine"
 for i in $(seq $REPS); do
+  echo ".print @@lance cosine 10"
   echo "SELECT count(*) FROM lance_vector_search('$LANCE_COS', 'vec', $QN, k => 10,  use_index => true, nprobs => $NPROBES);"
+  echo ".print @@lance cosine 100"
   echo "SELECT count(*) FROM lance_vector_search('$LANCE_COS', 'vec', $QN, k => 100, use_index => true, nprobs => $NPROBES);"
 done
 echo ".timer off"
@@ -112,15 +116,17 @@ echo "SET hnsw_ef_search=$HNSW_EFS;"
 echo "SELECT count(*) FROM (SELECT id FROM base ORDER BY array_distance(vec, $Q) LIMIT 10);"
 echo ".timer on"
 
-echo ".print @@duckdb l2"
 for i in $(seq $REPS); do
+  echo ".print @@duckdb l2 10"
   echo "SELECT count(*) FROM (SELECT id FROM base ORDER BY array_distance(vec, $Q) LIMIT 10);"
+  echo ".print @@duckdb l2 100"
   echo "SELECT count(*) FROM (SELECT id FROM base ORDER BY array_distance(vec, $Q) LIMIT 100);"
 done
 
-echo ".print @@duckdb cosine"
 for i in $(seq $REPS); do
+  echo ".print @@duckdb cosine 10"
   echo "SELECT count(*) FROM (SELECT id FROM base ORDER BY array_cosine_distance(vec, $Q) LIMIT 10);"
+  echo ".print @@duckdb cosine 100"
   echo "SELECT count(*) FROM (SELECT id FROM base ORDER BY array_cosine_distance(vec, $Q) LIMIT 100);"
 done
 echo ".timer off"

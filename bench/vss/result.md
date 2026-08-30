@@ -15,14 +15,20 @@ Engines: **Sirius** (GPU IVF-Flat), **Lance** (CPU IVF-Flat), **DuckDB** (CPU HN
 
 Single query, exact nearest neighbor.
 
-| engine | metric | min_ms | mean_ms |
-|--------|--------|-------:|--------:|
-| sirius | l2     |   21.0 |    22.7 |
-| sirius | cosine |   17.0 |    18.0 |
-| lance  | l2     | 1988.0 |  2640.2 |
-| lance  | cosine | 1722.0 |  2335.4 |
-| duckdb | l2     |  417.0 |   441.0 |
-| duckdb | cosine |  414.0 |   454.9 |
+| engine | metric |   k | min_ms | mean_ms |
+|--------|--------|----:|-------:|--------:|
+| sirius | l2     |  10 |   23.0 |    24.0 |
+| sirius | l2     | 100 |   21.0 |    22.8 |
+| sirius | cosine |  10 |   17.0 |    18.5 |
+| sirius | cosine | 100 |   18.0 |    19.3 |
+| lance  | l2     |  10 | 2012.0 |  2496.1 |
+| lance  | l2     | 100 | 2032.0 |  2361.0 |
+| lance  | cosine |  10 | 2100.0 |  2519.4 |
+| lance  | cosine | 100 | 2011.0 |  2415.8 |
+| duckdb | l2     |  10 |  407.0 |   461.8 |
+| duckdb | l2     | 100 |  419.0 |   450.6 |
+| duckdb | cosine |  10 |  425.0 |   470.8 |
+| duckdb | cosine | 100 |  432.0 |   473.1 |
 
 Note:
 - On Sirius `metric=cosine` runs with GEMM, and `metric=l2` does not, so it's slower as expected.
@@ -40,6 +46,7 @@ Note:
 
 Note:
 - We have not implemented batched ENN search, so the result shows that it runs sequentially.
+- While DuckDB throughput is a single batched, multi-threaded LATERAL query.
 
 ## Index Creation
 
@@ -58,14 +65,20 @@ n_lists=1024
 
 Single query, `n_lists=1024`, `n_probes=32`.
 
-| engine | index    | metric | min_ms | mean_ms |
-|--------|----------|--------|-------:|--------:|
-| sirius | IVF-FLAT | l2     |    5.0 |     6.9 |
-| sirius | IVF-FLAT | cosine |    5.0 |     7.1 |
-| lance  | IVF-FLAT | l2     |   30.0 |    50.6 |
-| lance  | IVF-FLAT | cosine |   35.0 |    54.2 |
-| duckdb | HNSW     | l2     |    7.0 |     8.3 |
-| duckdb | HNSW     | cosine |    9.0 |    10.6 |
+| engine | index    | metric |   k | min_ms | mean_ms |
+|--------|----------|--------|----:|-------:|--------:|
+| sirius | IVF-FLAT | l2     |  10 |    5.0 |     5.1 |
+| sirius | IVF-FLAT | l2     | 100 |    5.0 |     6.8 |
+| sirius | IVF-FLAT | cosine |  10 |    5.0 |     6.7 |
+| sirius | IVF-FLAT | cosine | 100 |    5.0 |     6.7 |
+| lance  | IVF-FLAT | l2     |  10 |   41.0 |    43.3 |
+| lance  | IVF-FLAT | l2     | 100 |   42.0 |    55.4 |
+| lance  | IVF-FLAT | cosine |  10 |   43.0 |    55.9 |
+| lance  | IVF-FLAT | cosine | 100 |   34.0 |    49.6 |
+| duckdb | HNSW     | l2     |  10 |    7.0 |     8.1 |
+| duckdb | HNSW     | l2     | 100 |    8.0 |     8.9 |
+| duckdb | HNSW     | cosine |  10 |   11.0 |    12.1 |
+| duckdb | HNSW     | cosine | 100 |   11.0 |    12.0 |
 
 Note:
 - We have not implemented batched ANN search, so the result shows that it runs sequentially.
@@ -125,13 +138,13 @@ Note:
 | duckdb | l2     |  —       |    —   |   —   |
 | duckdb | cosine |  —       |    —   |   —   |
 
+Note on DuckDB:
+- GIST at 960 dimensions is known to be hard for graph indexes, so this is expected for DuckDB HNSW.
 
 Note on Lance:
-- Lance is accessed through the DuckDB `lance_vector_search` extension, one call
-  per query. A native Lance (Python) run on the same index was measured
-  about 1.7x higher QPS, so the extension path is somewhat slower.
-- Even against native Lance, Sirius still leads by about 9x at recall >= 0.95
-  (Sirius ~178 qps vs native Lance ~20 qps at n_probes=64).
+- Note: Lance doesn't have cosine metric, so every Lance cosine run uses a unit-normalized dataset with an L2 index and a unit-normalized query.
+- Lance is accessed through the DuckDB `lance_vector_search` extension, one call per query. A native Lance (Python) run on the same index was measured about 1.7x higher QPS, so the extension path is somewhat slower.
+- Even against native Lance, Sirius still leads by about 9x at recall >= 0.95 (Sirius ~178 qps vs native Lance ~20 qps at n_probes=64).
 
 
 ## Recall-QPS curve
