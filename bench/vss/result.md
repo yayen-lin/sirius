@@ -127,7 +127,7 @@ Note:
 | duckdb | HNSW     | cosine |      160 |     - |    12.2 | 0.8800 |  81.8 |
 | duckdb | HNSW     | cosine |      320 |     - |    18.8 | 0.9405 |  53.1 |
 
-**QPS @ recall ≥ 0.95** (first sweep point that clears the target)
+**QPS @ recall ≥ 0.95**
 
 | engine | metric | probe/ef | recall |   qps |
 |--------|--------|---------:|-------:|------:|
