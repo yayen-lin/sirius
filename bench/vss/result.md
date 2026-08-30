@@ -50,7 +50,7 @@ Note:
 
 ## Index Creation
 
-n_lists=1024
+`n_lists=1024`.
 
 | engine | index    | metric | build_s |
 |--------|----------|--------|--------:|
