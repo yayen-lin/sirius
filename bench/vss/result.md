@@ -139,7 +139,7 @@ Note:
 | duckdb | cosine |  —       |    —   |   —   |
 
 Note on DuckDB:
-- GIST at 960 dimensions is known to be hard for graph indexes, so this is expected for DuckDB HNSW.
+- GIST at 960 dimensions is known to be hard for graph indexes, so lower recall is expected for DuckDB HNSW.
 
 Note on Lance:
 - Note: Lance doesn't have cosine metric, so every Lance cosine run uses a unit-normalized dataset with an L2 index and a unit-normalized query.

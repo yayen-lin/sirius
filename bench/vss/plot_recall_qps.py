@@ -90,29 +90,29 @@ def main():
     if crossings:
         rows = sorted(crossings, key=lambda c: -c[4])  # fastest first
         missed_rows = sorted(missed, key=lambda m: -m[2])
-        x0, ytop, dy = 0.075, 0.70, 0.058
+        x0, ytop, dy = 0.045, 0.72, 0.046
         n = len(rows) + len(missed_rows)
         panel = FancyBboxPatch(
-            (x0 - 0.035, ytop - (n - 1) * dy - 0.045), 0.40, n * dy + 0.085,
-            boxstyle="round,pad=0.006,rounding_size=0.015",
+            (x0 - 0.025, ytop - (n - 1) * dy - 0.035), 0.30, n * dy + 0.07,
+            boxstyle="round,pad=0.005,rounding_size=0.012",
             transform=ax.transAxes, facecolor="#faf9f5", edgecolor="#d4d3ca",
             lw=1, zorder=3.4)
         ax.add_patch(panel)
-        ax.text(x0, ytop + dy, f"QPS @ recall ≥ {args.target:g}",
-                transform=ax.transAxes, fontsize=10, fontweight="bold",
+        ax.text(x0, ytop + dy * 0.8, f"QPS @ recall ≥ {args.target:g}",
+                transform=ax.transAxes, fontsize=8.5, fontweight="bold",
                 color="#52514e", va="bottom", ha="left", family="monospace",
                 zorder=4)
         i = 0
         for engine, metric, np_, r, q in rows:
             ax.text(x0, ytop - i * dy,
                     f"{LABEL[engine]:6s} {metric:6s} {q:5.0f} qps",
-                    transform=ax.transAxes, fontsize=9.5, color=COLOR[engine],
+                    transform=ax.transAxes, fontsize=8, color=COLOR[engine],
                     va="top", ha="left", family="monospace", zorder=4)
             i += 1
         for engine, metric, best in missed_rows:
             ax.text(x0, ytop - i * dy,
                     f"{LABEL[engine]:6s} {metric:6s}   —  max {best:.2f}",
-                    transform=ax.transAxes, fontsize=9.5, color="#a9a89f",
+                    transform=ax.transAxes, fontsize=8, color="#a9a89f",
                     va="top", ha="left", family="monospace", zorder=4)
             i += 1
 
@@ -137,10 +137,6 @@ def main():
         ax.spines[s].set_color("#c3c2b7")
     ax.tick_params(colors="#52514e")
     ax.legend(frameon=False, fontsize=9, loc="lower left", ncol=3)
-
-    fig.text(0.5, -0.02,
-             "QPS is serial (1 / mean latency); the single-query call can't batch, so Sirius's GPU number is a floor.",
-             ha="center", fontsize=8, color="#898781")
 
     fig.tight_layout()
     fig.savefig(args.out, bbox_inches="tight", facecolor="white")
