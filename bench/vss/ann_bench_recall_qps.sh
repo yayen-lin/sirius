@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: ./bench/vss/ann_bench_recall.sh
+# Usage: ./bench/vss/ann_bench_recall_qps.sh
 set -euo pipefail
 
 export TMPDIR="$(mktemp -d)"
@@ -12,6 +12,7 @@ PROBES=(8 16 32 64 128 256)
 EFS=(10 20 40 80 160 320)
 HNSW_M=16
 HNSW_EFC=128
+TARGET=0.95  # QPS @ recall >= TARGET
 CLI=./build/release/duckdb
 DB=bench/vss/data/gist1m.duckdb
 LANCE=bench/vss/data/gist1m_base.lance
@@ -22,10 +23,11 @@ mapfile -t QIDS      < <($CLI $DB -noheader -list -c "SELECT id  FROM queries OR
 mapfile -t QVECS     < <($CLI $DB -noheader -list -c "SELECT vec FROM queries ORDER BY id LIMIT $NQ;")
 mapfile -t QVECS_NORM < <($CLI $DB -noheader -list -c "SET gpu_execution=false; SELECT list_transform(v, lambda x:(x/nrm)::FLOAT) FROM (SELECT vec::DOUBLE[] AS v, sqrt(list_sum(list_transform(vec::DOUBLE[], lambda y:y*y))) AS nrm FROM queries ORDER BY id LIMIT $NQ);")
 
-echo "db=$DB dim=$DIM k=$K nq=$NQ n_lists=$NLIST n_probes=${PROBES[*]} ef_search=${EFS[*]}"
+echo "db=$DB dim=$DIM k=$K nq=$NQ n_lists=$NLIST target=$TARGET n_probes=${PROBES[*]} ef_search=${EFS[*]}"
 
 report() {
-  awk -v k=$K -v nl=$NLIST '
+  local d; d=$(cat)
+  echo "$d" | awk -v k=$K -v nl=$NLIST '
     /^@@/     { block = substr($0, 3); next }
     /^RECALL/ { rc[$2" "$3" "$4] = $5; next }
     /real/    { for (i=1;i<=NF;i++) if ($i=="real") t=$(i+1)
@@ -34,11 +36,29 @@ report() {
             r = (b in rc) ? rc[b] : "0"
             if (a[1]=="duckdb") { idx="HNSW";     nls="-"; scan="-" }
             else                { idx="IVF-FLAT"; nls=nl;  scan=sprintf("%.2f%%", 100*a[3]/nl) }
-            printf "%-8s %-8s %-8s %-9s %4d %8d %8s %8s %9.1f %9.1f %8s\n",
+            printf "%-8s %-8s %-8s %-9s %4d %8d %8s %8s %9.1f %9.1f %8s %9.1f\n",
                    a[1], a[2], "ann", idx, k, a[3], nls, scan,
-                   1000*sum[b]/n[b], 1000*mn[b], r } }
-  ' | sort -k1,1 -k2,2 -k6,6n | { printf "\n%-8s %-8s %-8s %-9s %4s %8s %8s %8s %9s %9s %8s\n" \
-                 engine metric search index k "probe/ef" nlists "scan%" mean_ms min_ms recall; cat; }
+                   1000*sum[b]/n[b], 1000*mn[b], r, n[b]/sum[b] } }
+  ' | sort -k1,1 -k2,2 -k6,6n | { printf "\n%-8s %-8s %-8s %-9s %4s %8s %8s %8s %9s %9s %8s %9s\n" \
+                 engine metric search index k "probe/ef" nlists "scan%" mean_ms min_ms recall qps; cat; }
+
+  echo "$d" | awk -v target=$TARGET -v probes="${PROBES[*]}" -v efs="${EFS[*]}" '
+    /^@@/     { block = substr($0, 3); next }
+    /^RECALL/ { rc[$2" "$3" "$4] = $5; next }
+    /real/    { for (i=1;i<=NF;i++) if ($i=="real") t=$(i+1); n[block]++; s[block]+=t }
+    END { npp = split(probes, P, " "); npe = split(efs, EF, " ")
+          ne = split("sirius lance duckdb", E, " "); nm = split("l2 cosine", M, " ")
+          printf "\nQPS @ recall >= %s:\n", target
+          for (ei=1; ei<=ne; ei++) for (mi=1; mi<=nm; mi++) {
+            e=E[ei]; m=M[mi]; hit=0
+            if (e=="duckdb") { ns=npe; knob="ef";      for (i=1;i<=ns;i++) SW[i]=EF[i] }
+            else             { ns=npp; knob="nprobes"; for (i=1;i<=ns;i++) SW[i]=P[i]  }
+            for (i=1; i<=ns; i++) { key = e" "m" "SW[i]
+              if ((key in rc) && rc[key]+0 >= target) {
+                printf "  %-8s %-8s %s=%-5s recall=%-7s qps=%.1f\n", e, m, knob, SW[i], rc[key], n[key]/s[key]
+                hit=1; break } }
+            if (!hit) printf "  %-8s %-8s not reached in sweep\n", e, m } }
+  '
 }
 
 {
@@ -99,7 +119,7 @@ for metric in l2 cosine; do
   echo "SELECT * FROM __lance_cleanup_old_versions('$LDS', '{\"older_than_seconds\":0,\"delete_unverified\":true}');"
 done
 
-# ===== DuckDB =====
+# ===== DuckDB HNSW =====
 # Setup
 echo "SET gpu_execution = false;"
 echo "LOAD vss;"

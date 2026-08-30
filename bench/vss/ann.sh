@@ -9,6 +9,9 @@ trap 'rm -rf "$TMPDIR"' EXIT
 QID="999"
 NLIST=1024        # IVF partitions; must match on both engines
 NPROBES=32        # lists probed per query; must match on both engines
+HNSW_M=16         # DuckDB HNSW graph degree (build-time)
+HNSW_EFC=128      # DuckDB HNSW ef_construction (build-time)
+HNSW_EFS=64       # DuckDB HNSW ef_search (query-time recall knob, HNSW's nprobes-equivalent)
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
 DB="$REPO/bench/vss/data/gist1m.duckdb"
@@ -77,4 +80,31 @@ SELECT count(*) FROM lance_vector_search('$LANCE_COS', 'vec', $QN, k => 100, use
 -- cosine cleanup
 DROP INDEX vec_idx ON '$LANCE_COS';
 SELECT * FROM __lance_cleanup_old_versions('$LANCE_COS', '{"older_than_seconds":0,"delete_unverified":true}');
+
+-- ===== DuckDB HNSW =====
+-- turn off Sirius interception so the ORDER BY runs on plain DuckDB and hits the HNSW index
+SET gpu_execution=false;
+LOAD vss;
+-- persistent (on-disk) DB needs this flag before an HNSW index can be built
+SET hnsw_enable_experimental_persistence=true;
+
+-- l2 setup & warmup (native cosine works here, no normalized dataset needed)
+CREATE INDEX h_l2  ON base USING HNSW (vec) WITH (metric='l2sq',   ef_construction=$HNSW_EFC, M=$HNSW_M);
+CREATE INDEX h_cos ON base USING HNSW (vec) WITH (metric='cosine', ef_construction=$HNSW_EFC, M=$HNSW_M);
+SET hnsw_ef_search=$HNSW_EFS;
+SELECT count(*) FROM (SELECT id FROM base ORDER BY array_distance(vec, $Q) LIMIT 10);
+
+.timer on
+-- l2
+SELECT count(*) FROM (SELECT id FROM base ORDER BY array_distance(vec, $Q) LIMIT 10);
+SELECT count(*) FROM (SELECT id FROM base ORDER BY array_distance(vec, $Q) LIMIT 100);
+
+-- cosine
+SELECT count(*) FROM (SELECT id FROM base ORDER BY array_cosine_distance(vec, $Q) LIMIT 10);
+SELECT count(*) FROM (SELECT id FROM base ORDER BY array_cosine_distance(vec, $Q) LIMIT 100);
+.timer off
+
+-- cleanup
+DROP INDEX h_l2;
+DROP INDEX h_cos;
 SQL

@@ -6,7 +6,9 @@ export TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 NLIST=1024
-REPEATS=5
+REPEATS=1
+HNSW_M=16          # DuckDB HNSW graph degree
+HNSW_EFC=128       # DuckDB HNSW ef_construction
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
 DB="$REPO/bench/vss/data/gist1m.duckdb"
@@ -78,6 +80,30 @@ for i in $(seq $REPEATS); do
   echo ".timer off"
   echo "DROP INDEX vec_idx ON '$LANCE';"
   echo "SELECT * FROM __lance_cleanup_old_versions('$LANCE', '{\"older_than_seconds\":0,\"delete_unverified\":true}');"
+done
+
+# ===== DuckDB HNSW =====
+echo "SET gpu_execution=false;"
+echo "LOAD vss;"
+echo "SET hnsw_enable_experimental_persistence=true;"
+# Warmup & Setup
+echo "CREATE INDEX h_idx ON base USING HNSW (vec) WITH (metric='l2sq', ef_construction=$HNSW_EFC, M=$HNSW_M);"
+echo "DROP INDEX h_idx;"
+
+echo ".print @@duckdb l2"
+for i in $(seq $REPEATS); do
+  echo ".timer on"
+  echo "CREATE INDEX h_idx ON base USING HNSW (vec) WITH (metric='l2sq', ef_construction=$HNSW_EFC, M=$HNSW_M);"
+  echo ".timer off"
+  echo "DROP INDEX h_idx;"
+done
+
+echo ".print @@duckdb cosine"
+for i in $(seq $REPEATS); do
+  echo ".timer on"
+  echo "CREATE INDEX h_idx ON base USING HNSW (vec) WITH (metric='cosine', ef_construction=$HNSW_EFC, M=$HNSW_M);"
+  echo ".timer off"
+  echo "DROP INDEX h_idx;"
 done
 
 } | "$CLI" "$DB" | report

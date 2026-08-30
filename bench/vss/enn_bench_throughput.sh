@@ -2,9 +2,9 @@
 # Usage: ./bench/vss/enn_bench_throughput.sh
 set -euo pipefail
 
-QID=0           # first query id
-NQ=100          # num of queries per run
-K=10            # top-k
+QID=0
+NQ=1000
+K=10
 CLI=./build/release/duckdb
 DB=bench/vss/data/gist1m.duckdb
 
