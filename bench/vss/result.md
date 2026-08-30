@@ -156,5 +156,4 @@ Note on DuckDB:
 Note on Lance:
 - Note: Lance doesn't have cosine metric, so every Lance cosine run uses a unit-normalized dataset with an L2 index and a unit-normalized query.
 - Lance is accessed through the DuckDB `lance_vector_search` extension, one call per query. A native Lance (Python) run on the same index was measured about 1.7x higher QPS, so the extension path is somewhat slower.
-- Even against native Lance, Sirius still leads by about 9x at recall >= 0.95 (Sirius ~178 qps vs native Lance ~20 qps at n_probes=64).
 
