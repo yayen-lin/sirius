@@ -34,7 +34,7 @@
 
 \author{Yayen Lin}
 \email{yayen@cs.wisc.edu}
-\authornote{Both authors contributed equally to this research.}
+\authornote{These authors contributed equally to this research.}
 \affiliation{%
   \institution{University of Wisconsin-Madison}
   \city{Madison}
@@ -63,11 +63,10 @@
 
 % in abstract we enter it with a hook
 %
-% and then 3 args:
+% and then 3 args are briefly talked about, echoed later:
 %   1. OLAP remains unexplored
 %   2. database engine is the perfect fit
 %   3. GPU is the perfect fit
-% which are then talked a bit more in detail in the introduction section
 
 Relational data went through OLTP to OLAP decades ago: answering one row at a time and analyzing all rows at once turned out to be different problems that need different engines (use engines or solutions?). In this paper, we argue that vector search solves the OLTP half of the problem and the OLAP half remains largely unexplored and incomplete, and that GPU is the only way to scale it and database engine is the perfect fit for it. We present Sirius vector join, a prototype first class operator that integrates to and is optimized by query plan. It runs on Sirius, a GPU native SQL engine, and leverages libraries like cuVS for high-performance batched vector search (a batched vector search eventually a vector join). It achieves 165x speedup than a DuckDB vector join that uses LATERAL on the exact join path, and 227x speedup on the approximate join path using IVF-Flat index type.
 \end{abstract}
@@ -76,19 +75,21 @@ Relational data went through OLTP to OLAP decades ago: answering one row at a ti
 
 \maketitle
 
-\section{Introduction}
+\section{Introduction}\label{sec:introduction}
 
-% will come back and visit this section, for now just bullet points on what we wanna talk about
+% will come back and visit this section because it's the summary of the paper, for now just put bullet points on what we wanna talk about
 
 TBD
 
-\section{Background}
+\section{Background}\label{sec:background}
 
 % A bit more in detail echoing what we talked about in abstract
 
 \input{quadrant}
 
-In the history of database, the focus shifted from OLTP, one query, an index, an answer in milliseconds, to OLAP, where the question becomes what matches ``what'' instead of what matches ``this''. After OLTP became mature, we've seen the shift and how OLAP has become popular in many different fields that involve data analysis. We believe vector data is at the same inflection point. A vector search asks what's similar to this, when we want to ask what's similar to what, it becomes a vector join, a many-to-many instead of one-to-many (Figure~\ref{fig:quadrant}). Vector search is now a mature and crowded market, served by a number of dedicated engines~\cite{WangMilvus21, PineconeDocs, WeaviateDocs, QdrantDocs, ValdDocs} or integrated into traditional databases~\cite{PgvectorRepo, DuckDBVSS, ClickHouseVSS, SnowflakeVector, BigQueryVectorSearch, SQLServer2025Vector, MySQLHeatWaveVector}. What is missing is the other half. We see a lack of complete systems or vendors that provide vector join operations, and we believe there is going to be a similar transition of the focus, because the workloads for vector join already exist and are in great demand.
+In the history of databases, the focus shifted from OLTP to OLAP, and the two quadrants are separated by the question they answer. OLTP answers ``what matches this'': how do we find this person's record, this order, this account, one index lookup and an answer in milliseconds. OLAP answers ``what matches what'': what were total sales by region last quarter, the analytical question that scans and aggregates across all the rows at once. After OLTP matured, this shift is what made OLAP central to nearly every field that touches data analysis.
+
+We believe vector data is at the same inflection point (Figure~\ref{fig:quadrant}). The vector counterpart of OLTP is vector search, which answers ``what is similar to this'': given one query vector, return its nearest neighbors. The analytical quadrant asks ``what is similar to what'', scoring a whole table of vectors against another. That is a vector join, a many-to-many instead of a one-to-many. Vector search is now a mature and crowded market, served by a number of dedicated engines~\cite{WangMilvus21, PineconeDocs, WeaviateDocs, QdrantDocs, ValdDocs} or integrated into traditional databases~\cite{PgvectorRepo, DuckDBVSS, ClickHouseVSS, SnowflakeVector, BigQueryVectorSearch, SQLServer2025Vector, MySQLHeatWaveVector}. What is missing is the other half. We see a lack of complete systems or vendors that provide vector join operations, and we believe a similar transition of focus is coming, because the workloads for vector join already exist and are in great demand.
 
 \subsection{Vector Joins and Their Applications}
 
