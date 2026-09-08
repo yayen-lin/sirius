@@ -1,0 +1,42 @@
+% Vector-join quadrant figure (paper-ready).
+%
+% Paste this block where you want the figure in the paper, OR \input this file.
+% Preamble needs (you already have \usepackage{tikz}):
+%     \usetikzlibrary{arrows.meta,positioning}
+% Do NOT add \documentclass / \begin{document} -- this is a fragment.
+
+\begin{figure}
+  \centering
+  \begin{tikzpicture}[
+      font=\small\sffamily,
+      cell/.style={draw, rounded corners=2pt, minimum width=3.2cm,
+                   minimum height=1.5cm, align=center},
+      open/.style={cell, dashed, line width=0.9pt, fill=black!8},
+      ax/.style={font=\small\sffamily\bfseries},
+      shift/.style={-{Latex[length=2.2mm]}, thick, black!65},
+    ]
+
+    % four quadrants: each named once, nothing more
+    \node[cell] (a) at (0,0)      {OLTP};
+    \node[cell] (b) at (3.6,0)    {OLAP};
+    \node[cell] (c) at (0,-2.1)   {vector search};
+    \node[open] (d) at (3.6,-2.1) {vector join\\[1pt]\textit{\footnotesize this work}};
+
+    % the shift, drawn on both rows
+    \draw[shift] (a) -- (b);
+    \draw[shift] (c) -- (d);
+
+    % column axis: the one-vs-many distinction, in the paper's own words
+    \node[ax, above=8pt of a] {one at a time};
+    \node[ax, above=8pt of b] {all at once};
+
+    % row axis
+    \node[ax, rotate=90, left=8pt of a] {relational};
+    \node[ax, rotate=90, left=8pt of c] {vector};
+  \end{tikzpicture}
+  \caption{Relational data moved from answering one row at a time (OLTP)
+    to analyzing all rows at once (OLAP). Vector data is at the same
+    inflection point: vector search answers one query, and the all-at-once
+    quadrant, the vector join, is largely unexplored.}
+  \label{fig:quadrant}
+\end{figure}
