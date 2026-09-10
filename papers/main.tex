@@ -69,7 +69,7 @@
 %   3. GPU is the perfect fit
 
 Relational data went through OLTP to OLAP decades ago: answering one row at a time and analyzing all rows at once turned out to be different problems that need different engines.
-In this paper, we argue that vector search has solves the OLTP half of the problem, while the OLAP half remains largely unexplored, and that the GPU is the natural way to scale it and a database engine is the perfect fit for it.
+In this paper, we argue that vector search solves the OLTP half of the problem, while the OLAP half remains largely unexplored, and that the GPU is the natural way to scale it and a database engine is the perfect fit for it.
 We present Sirius vector join, a prototype first class operator that integrates into and is optimized by query plan.
 It runs on Sirius, a GPU native SQL engine, and leverages cuVS for high-performance batched vector search (a vector join is, at its core, a batched vector search).
 It achieves a 165x speedup over a DuckDB vector join that uses LATERAL on the exact join path, and is 227x faster on the approximate join path using IVF-Flat index type.
@@ -87,28 +87,56 @@ TBD
 
 \section{Background}\label{sec:background}
 
-% A bit more in detail echoing what we talked about in abstract
+% facts
+
+\subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
+
+A vector embedding is a fixed-length array of numbers that a machine learning model produces from a piece of data (structured or unstructured) such as a passage of text, an image, an audio, a video, or a pattern.
+The model is trained so that geometric proximity in this vector space corresponds to semantic similarity: semantically similar inputs map to nearby vectors, and unrelated inputs map farther apart.
+Proximity is measured with a distance or similarity function over the vectors, most commonly Euclidean (L2) distance, cosine similarity, or inner product.
+Modern embedding models produce vectors with hundreds to thousands of dimensions, and both the number of embeddings and their dimensionality grow with the size of the dataset and the capacity of the model.
+Because the embedding turns an unstructured object into a point in a metric space, semantic comparison becomes a distance computation over their vectors.
+
+\subsection{Vector Search}\label{subsec:vector-search}
+
+Vector search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.
+A brute-force scan compares the query vector against every vector in the dataset, which is exact but expensive at scale.
+To go faster, systems build an approximate nearest neighbor (ANN) index such as IVF or HNSW, which restricts the search to a small subset of candidates and trades some recall for large speedups.
+Vector search is now a mature and crowded market, served by a number of dedicated engines~\cite{WangMilvus21, PineconeDocs, WeaviateDocs, QdrantDocs, ValdDocs} or integrated into traditional databases~\cite{PgvectorRepo, DuckDBVSS, ClickHouseVSS, SnowflakeVector, BigQueryVectorSearch, SQLServer2025Vector, MySQLHeatWaveVector} on use cases like RAG, recommendation, and image/video/audio search.
+
+\subsection{The Vector Join}\label{subsec:the-vector-join}
+
+While a search answers a point query, a vector \emph{join} answers a set query: given a table $R$ of probe vectors and a table $S$ of corpus vectors, return, for the whole of $R$, the neighbors in $S$ that satisfy a similarity condition.
+The condition takes one of three forms: the $k$ nearest per row of $R$ (per-row top-$k$), the $k$ nearest pairs overall (global top-$k$), or every pair within a distance threshold (a radius join).
+
+\section{Motivation}
+\label{sec:motivation}
+
+\subsection{What's Missing: A Logical Operator}\label{subsec:what-is-missing}
+
+The payoff of making the vector join a real database operator is that the optimizer decides how to run it, using what it knows about the query.
+The main decision is exact versus approximate.
+If earlier steps in the query filter the data down to a few rows, an approximate join over a quickly built index is enough.
+If most rows survive, an exact brute-force join is the better choice, and on a GPU it is cheap enough to afford.
+The same operator can even pick which kind of index to build.
+This choice depends on how much data actually reaches the join, which is only known while the query runs, so it belongs to the query planner.
+
+\subsection{The Transition}\label{subsec:the-transition}
 
 \input{quadrant}
 
-In the history of databases, the focus shifted from OLTP to OLAP, and the two quadrants are separated by the question they answer.
-OLTP answers ``what matches this'': how do we find this person's record, this order, this account, one index lookup and an answer in milliseconds.
-OLAP answers ``what matches what'': what were total sales by region last quarter, the analytical question that scans and aggregates across all the rows at once.
+Databases shifted their focus from OLTP to OLAP~\cite{StonebrakerPavloAround24}, and the two differ by whether a query is about one row or about all of them at once.
+OLTP answers ``what matches this'': find this person's record, this order, this account, one lookup and an answer in milliseconds.
+OLAP answers ``what matches what'': what were the total sales by region last quarter, the analytical question that scans and aggregates across all the rows at once.
 After OLTP matured, this shift is what made OLAP central to nearly every field that touches data analysis.
 
-We believe vector data is at the same inflection point (Figure~\ref{fig:quadrant}). The vector counterpart of OLTP is vector search, which answers ``what is similar to this'': given one query vector, return its nearest neighbors.
-The analytical quadrant asks ``what is similar to what'', scoring a whole table of vectors against another.
-That is a vector join, a many-to-many instead of a one-to-many.
-Vector search is now a mature and crowded market, served by a number of dedicated engines~\cite{WangMilvus21, PineconeDocs, WeaviateDocs, QdrantDocs, ValdDocs} or integrated into traditional databases~\cite{PgvectorRepo, DuckDBVSS, ClickHouseVSS, SnowflakeVector, BigQueryVectorSearch, SQLServer2025Vector, MySQLHeatWaveVector}.
-What is missing is the other half.
-We see a lack of complete systems or vendors that provide vector join operations, and we believe a similar transition of focus is coming, because the workloads for vector join already exist and are in great demand.
+Vector data sits at the same inflection point (Figure~\ref{fig:quadrant}).
+Vector search is the OLTP question, ``what is similar to this'': given one query vector, return its nearest neighbors.
+The OLAP question is ``what is similar to what'': score a whole table of vectors against another.
+That is a vector join, many-to-many instead of one-to-many, and it is the half that is missing.
+Few systems or vendors offer vector join operations today, and we believe there is going to be a similar transition of the focus, because the workloads for vector join already exist and are in great demand.
 
-\subsection{Vector Joins and Their Applications}\label{subsec:vector-joins-and-their-applications}
-
-% this parapgrah we can explore more use cases
-
-A vector \emph{search} answers a point query: given one query vector, return its top-$k$ nearest neighbors from a corpus with latency as the primary concern. A vector \emph{join} answers a set query: given a table $R$ of probe vectors and a table $S$ of corpus vectors, return, for the whole of $R$, the neighbors in $S$ that satisfy a similarity condition (top k nearest or some distance threshold).
-The difference is the same one that separates a key lookup from a hash join.
+\subsection{The Workloads and Related Work}\label{subsec:the-work}
 
 This shape recurs across analytical workloads.
 In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points; pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{AbbasSemDeDup23}.
@@ -120,38 +148,40 @@ The demand is now surfacing in native SQL language itself.
 Apache Spark has a standing proposal for a \texttt{NEAREST BY} top-$k$ ranking join~\cite{ApacheSparkJIRA56395}, Databricks SQL already ships a \texttt{NEAREST BY} clause~\cite{DatabricksNearestBy26}, and recently DuckDB~\cite{DuckDBNearestByPR24137}.
 The declarative surface for vector joins is beginning to standardize, which sharpens the open question: how to \emph{execute} one efficiently.
 
-\subsection{Vector Joins Are Relational Joins}\label{subsec:vector-joins-are-relational-joins}
+\subsection{A Vector Join Is a Relational Join}\label{subsec:why-database}
 
 % this paragraph we can argue a little more on this topic and reflect our implementation, and we can add "for more detail refer to the implementation section" to bring readers into the implementation section
 
-The reason the vector join belongs in a database, rather than a vector-search library, is that it is a relational join.
-Its join predicate is a non-equi condition that ranks candidate pairs by distance, and it is followed by a reduction that selects which ranked pairs survive: the $k$ nearest per row of $R$ (per-row top-$k$), the $k$ nearest pairs overall (global top-$k$), or every pair within a distance threshold (a radius join).
+The reason the vector join belongs in a database rather than a vector-search library is that it is a relational join~\cite{StonebrakerPavloAround24}.
+Its join predicate is a non-equi condition that ranks candidate pairs by distance, and it is followed by a reduction that selects which ranked pairs survive (the three forms above).
 These are the vector analogues of the reductions that OLAP engines already optimize, and the \texttt{NEAREST BY} proposals encode exactly this structure~\cite{ApacheSparkJIRA56395, DatabricksNearestBy26}.
 
 Treating it as a join brings the standard toolbox to work with.
 Reductions can be pushed into the join so that only surviving pairs are ever materialized, in the same spirit as pushing a limit or an aggregate below a join.
 More importantly, the join can be \emph{partitioned}.
 A hash join partitions by a hash of the join key so that only co-partitioned rows are compared; a vector join partitions by \emph{semantic} proximity, clustering both sides so that a query row is compared only against corpus rows in nearby clusters.
-This is precisely the structure of IVF-style approximate search, recast as a partitioned join, and it is what lets one operator span the spectrum from exact (compare against everything, or against a small in-memory cluster) to approximate (probe only the nearest clusters) with the same relational machinery.
+This is the structure of IVF-style approximate search, recast as a partitioned join, and it is what lets one operator span the spectrum from exact to approximate with the same relational machinery.
+The planner reads the intermediate cardinality and picks exact or approximate accordingly
 
-\subsection{Why the GPU}\label{subsec:why-the-gpu}
+\subsection{Why the GPU}\label{subsec:why-gpu}
 
 % This section we can show more of our understanding about the type of workloads and use cases we've identified and show that GPU is the perfect fit for this kind of even-more-compute-intensive workload.
 
 Relational OLAP is the heavier sibling of OLTP, and the intuition carries an expectation that the analytical vector workload should be heavier too.
 The opposite is true on modern hardware.
-The core of a vector join is the computation of pairwise distances between a batch of query vectors and a batch of corpus vectors, which for the common metrics reduces to a dense matrix--matrix product.
-This is the single operation GPUs are built to saturate, and the batched, table-sized query side of a join is what turns a memory-bound, launch-overhead-dominated single-query search into a compute-bound GEMM that keeps the tensor cores busy.
+The core of a vector join is the computation of pairwise distances between a batch of query vectors and a batch of corpus vectors, which for the common metrics reduces to a dense matrix product.
+This is the operation GPUs are built to saturate: the batched, table-sized query side of a join is what turns a memory-bound, launch-overhead-dominated single-query search into a compute-bound GEMM that keeps the tensor cores busy.
 
 Two consequences follow.
 First, throughput at the scale a join demands is attainable on a single device, using the same GPU-resident vector primitives that libraries such as cuVS~\cite{NvidiaCuVS26} expose.
 Second, and more surprising, \emph{exact} joins become affordable across a large regime: a tiled brute-force join computes the distance matrix in blocks and never materializes it in full, so the answer is exact where CPU systems were pushed toward approximate search for cost reasons alone.
 Building the operator inside a GPU-native SQL engine~\cite{Yogatama26} keeps it on the device alongside the scans, filters, and aggregations of the surrounding query, so the vector join is one operator in a pipeline rather than a call out to a separate system.
 
-\section{Motivation}
-\label{sec:motivation}
+\subsection{A Motivating Query}\label{subsec:motivating-query}
 
-% other arguments -- TBD
+% M.6 TODO (new): one concrete SQL example -- semantic dedup or entity resolution
+% as a single query -- that pays off M.1's pain and shows the end-to-end vision
+% (one engine, no data shipping between systems).
 
 TBD.
 
