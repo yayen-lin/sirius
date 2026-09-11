@@ -170,7 +170,7 @@ The planner reads the cardinality of the intermediate result reaching the join a
 
 % This section we can show more of our understanding about the type of workloads and use cases we've identified and show that GPU is the perfect fit for this kind of even-more-compute-intensive workload.
 
-Relational OLAP is the heavier sibling of OLTP, and the intuition carries an expectation that the analytical vector workload should be heavier too, but that is what makes it a better fit for the GPU.
+Relational OLAP is the heavier sibling of OLTP, and the intuition carries an expectation that the analytical vector workload should be heavier too, but that is what makes it a better fit for the GPU\@.
 The core of a vector join is the computation of pairwise distances between a batch of query vectors and a batch of corpus vectors, which for the common metrics reduces to a dense matrix product.
 A single-query search leaves the GPU memory-bound and dominated by launch overhead; batching the query side turns it into a compute-bound GEMM that saturates the tensor cores.
 In other words, we achieve higher arithmetic intensity from having batched inputs; it does more work but runs far more efficiently per unit of work.
@@ -179,7 +179,7 @@ One query at a time barely occupies the GPU; scoring a whole table of queries at
 
 Two things follow from this mapping, one expected and one not.
 The expected payoff is throughput.
-A single GPU delivers what a join needs byreusing the same on-device search primitives that libraries such as cuVS~\cite{NvidiaCuVS26} already provide.
+A single GPU delivers what a join needs by reusing the same on-device search primitives that libraries such as cuVS~\cite{NvidiaCuVS26} already provide.
 The surprising one is exactness.
 A tiled brute-force join computes the distance matrix in blocks and never materializes it in full, so the answer stays exact where CPU systems had to settle for approximate search on cost alone.
 Building the operator inside a GPU-native SQL engine~\cite{Yogatama26} keeps it on the device alongside the scans, filters, and aggregations of the surrounding query, so the vector join runs as one stage of the same GPU pipeline.
@@ -194,7 +194,38 @@ TBD.
 
 \section{Technical \#1: Exact}\label{sec:technical-1:-exact}
 
-TBD.
+\input{exact}
+
+% TODO: Add a section opener, 1-2 sentences framing the whole section: exact join, fits on GPU, three reduction modes, expressed as Sirius operators
+
+% TODO: we should briefly introduce super sirius first, and talk about how their relational operators were reused across these vector join operators
+When the corpus fits in GPU memory, the exact join is a brute-force walk over batches (Figure~\ref{fig:exact}).
+Sirius reads both tables as batches, so the probe side arrives as a batch of query rows rather than a single query vector, and a brute-force search over one such batch is already a top-$k$ join between it and one corpus batch.
+The join visits every pair of a probe batch and a corpus batch, runs that top-$k$ on the pair, and merges each probe row's results across all corpus batches into its final top-$k$.
+As no step ever holds the full probe-by-corpus distance matrix, each pair is computed one tile at a time and reduced on the spot.
+
+% TODO: do a code review and add any missing technical detail or design decision
+\paragraph{Per-row} The per-row mode returns the $k$ nearest corpus rows for each probe row, and it is the base the other two modes build on.
+Every (probe batch, corpus batch) pair goes through cuVS: \texttt{brute\_force::build} wraps the corpus batch as an index, and \texttt{brute\_force::search} returns, for each probe row in that pair, its $k$ nearest rows within that one corpus batch.
+This search is where the GEMM and the internal tiling live, so a pair is scored without ever materializing its distance block in full.
+Each probe row now hold one top-$k$ per corpus batch, and \texttt{knn\_merge\_parts} merges those per-batch lists into the row's final top-$k$ across the whole corpus. % TODO: mention cuVS API's internal tiling and GEMM here in this paragraph
+
+\paragraph{Global} The global mode returns the $k$ nearest pairs across the whole join rather than $k$ per probe row.
+It sits downstream of per-row: once the per-row reduction has each probe row's local top-$k$, the engine's existing \texttt{TOP\_N} and \texttt{MERGE\_TOP\_N} operators reduce those candidates into the single global top-$k$.
+This mode reuses operators the engine already has, which is exactly the leverage of building the vector join out of ordinary relational operators.
+
+\paragraph{Threshold} The threshold join mode returns every pair whose distance falls within a radius $\varepsilon$.
+It is the one mode whose output size is not bounded. Top-$k$ yields a fixed number of results per probe row, but the number of pairs within $\varepsilon$ depends on the data and the threshold, so the output cannot be sized ahead of time.
+Since cuVS's available APU presumes a bounded output, there is not an appropriate threshold search kernel that suits our use case.
+Our approach is to reuse the same \texttt{brute\_force::search} kernel but replace the top-$k$ step with a threshold filter (\texttt{thrust::copy\_if}) that keeps every pair whose distance is within $\varepsilon$.
+In doing so we get to keep the nice properties that brute-force search provides and achieve what we wanted to achieve.
+The output is an edge list, one row per surviving (probe, corpus) pair carrying the two rwo ids and their distance.
+And it is never sized in advance.
+It starts empty and grows geometrically as each tile's survivors are appended in the same way a dynamic array does, so the total copy work stays linear in the number of surviving pairs and no counting pass is needed.
+Because each tile is filtered the moment it is computed, the full distance matrix is never materialized; only one small tile and the surviving pairs sit in memory at any point.
+Cosine runs through the same GEMM path with no need to normalize the input vectors first.
+
+
 
 \section{Technical \#2: Approximate}\label{sec:technical-2:-approximate}
 

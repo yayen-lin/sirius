@@ -1,0 +1,43 @@
+\begin{figure}
+  \centering
+  \begin{tikzpicture}[
+      font=\small\sffamily,
+      tile/.style={draw, minimum size=0.9cm},
+      hot/.style={tile, fill=black!12},
+      box/.style={draw, rounded corners=2pt, align=left,
+                  minimum width=2.9cm, minimum height=1.9cm},
+      ax/.style={font=\small\sffamily\bfseries},
+      flow/.style={-{Latex[length=2.2mm]}, thick, black!65},
+    ]
+
+    % probe (R) rows by corpus (S) columns, the pairwise-distance space
+    \foreach \i in {0,1,2} {
+      \foreach \j in {0,1,2} {
+        \node[tile] (t\i\j) at (\j*0.92, -\i*0.92) {};
+      }
+    }
+    % one tile in flight
+    \node[hot] at (0.92,-0.92) {};
+
+    % axes
+    \node[ax, anchor=south] at (0.92, 0.72) {corpus $S$};
+    \node[ax, rotate=90, anchor=south] at (-0.78, -0.92) {probe $R$};
+
+    % reduce stage
+    \node[box] (red) at (5.4,-0.92)
+      {\textbf{reduce}\\[2pt]
+       per-row top-$k$\\
+       global top-$k$\\
+       threshold $\varepsilon$};
+
+    \draw[flow] (2.30,-0.92) -- node[above, font=\scriptsize\sffamily] {reduce} (red.west);
+  \end{tikzpicture}
+  \caption{The exact vector join reads both tables as batches and walks
+    the probe-by-corpus space one batch pair at a time. Each pair
+    (shaded tile) runs a brute-force top-$k$: the pairwise distances are
+    computed with a GEMM, tiled internally, and never materialized in
+    full. A reduction over the per-pair results yields the answer, the
+    $k$ nearest per probe row, the $k$ nearest pairs overall, or every
+    pair within a threshold $\varepsilon$.}
+  \label{fig:exact}
+\end{figure}
