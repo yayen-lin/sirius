@@ -201,12 +201,12 @@ TBD.
 % TODO: we should briefly introduce super sirius first, and talk about how their relational operators were reused across these vector join operators
 When the corpus fits in GPU memory, the exact join is a brute-force walk over batches (Figure~\ref{fig:exact}).
 Sirius reads both tables as batches, so the probe side arrives as a batch of query rows rather than a single query vector, and a brute-force search over one such batch is already a top-$k$ join between it and one corpus batch.
-The join visits every pair of a probe batch and a corpus batch, runs that top-$k$ on the pair, and merges each probe row's results across all corpus batches into its final top-$k$.
-As no step ever holds the full probe-by-corpus distance matrix, each pair is computed one tile at a time and reduced on the spot.
+The join visits every pair of a probe batch and a corpus batch, runs top-$k$ on the pair, and merges each probe row's results across all corpus batches into its final top-$k$.
+As no step ever holds the full distance matrix, each pair is computed one tile at a time and reduced on the spot.
 
 % TODO: do a code review and add any missing technical detail or design decision
 \paragraph{Per-row} The per-row mode returns the $k$ nearest corpus rows for each probe row, and it is the base the other two modes build on.
-Every (probe batch, corpus batch) pair goes through cuVS: \texttt{brute\_force::build} wraps the corpus batch as an index, and \texttt{brute\_force::search} returns, for each probe row in that pair, its $k$ nearest rows within that one corpus batch.
+Every (probe batch, corpus batch) pair goes through cuVS; \texttt{brute\_force::build} wraps the corpus batch as an index, and \texttt{brute\_force::search} returns, for each probe row in that pair, its $k$ nearest rows within that one corpus batch.
 This search is where the GEMM and the internal tiling live, so a pair is scored without ever materializing its distance block in full.
 Each probe row now hold one top-$k$ per corpus batch, and \texttt{knn\_merge\_parts} merges those per-batch lists into the row's final top-$k$ across the whole corpus. % TODO: mention cuVS API's internal tiling and GEMM here in this paragraph
 
@@ -216,12 +216,11 @@ This mode reuses operators the engine already has, which is exactly the leverage
 
 \paragraph{Threshold} The threshold join mode returns every pair whose distance falls within a radius $\varepsilon$.
 It is the one mode whose output size is not bounded. Top-$k$ yields a fixed number of results per probe row, but the number of pairs within $\varepsilon$ depends on the data and the threshold, so the output cannot be sized ahead of time.
-Since cuVS's available APU presumes a bounded output, there is not an appropriate threshold search kernel that suits our use case.
+Since cuVS's available API presumes a bounded output, there is not an appropriate threshold search kernel that suits our use case.
 Our approach is to reuse the same \texttt{brute\_force::search} kernel but replace the top-$k$ step with a threshold filter (\texttt{thrust::copy\_if}) that keeps every pair whose distance is within $\varepsilon$.
 In doing so we get to keep the nice properties that brute-force search provides and achieve what we wanted to achieve.
-The output is an edge list, one row per surviving (probe, corpus) pair carrying the two rwo ids and their distance.
-And it is never sized in advance.
-It starts empty and grows geometrically as each tile's survivors are appended in the same way a dynamic array does, so the total copy work stays linear in the number of surviving pairs and no counting pass is needed.
+The output is an edge list, one row per surviving (probe, corpus) pair carrying the two row ids and their distance.
+There's no need to pre-allocate output buffer in advance: it starts empty and grows geometrically as each tile's survivors are appended in the same way a dynamic array does, so the total copy work stays linear in the number of surviving pairs and no counting pass is needed.
 Because each tile is filtered the moment it is computed, the full distance matrix is never materialized; only one small tile and the surviving pairs sit in memory at any point.
 Cosine runs through the same GEMM path with no need to normalize the input vectors first.
 
