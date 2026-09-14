@@ -1,0 +1,74 @@
+\begin{figure*}[t]
+\centering
+\tikzset{
+  op/.style={draw, rounded corners, align=center, font=\scriptsize\sffamily,
+             minimum width=2.1cm, minimum height=0.5cm, fill=white},
+  top/.style={draw, rounded corners, align=center, font=\scriptsize\sffamily,
+              minimum width=4.6cm, fill=black!5},
+  flow/.style={-{Latex[length=1.5mm]}},
+  blabel/.style={font=\scriptsize\bfseries\sffamily, inner sep=1pt}}
+
+% ---- (a) distance-predicate join ----
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\begin{lstlisting}[language=SQL, basicstyle=\ttfamily\scriptsize, frame=none,
+                   aboveskip=0pt, belowskip=4pt]
+SELECT *, array_distance(l.v, r.v) AS dist
+FROM l JOIN r ON array_distance(l.v, r.v) <= 5;
+\end{lstlisting}
+\begin{tikzpicture}
+  \node[op] (s0) at (0,0)     {GPU\_SCAN};
+  \node[op] (s3) at (2.7,0)   {GPU\_SCAN};
+  \node[op] (p1) at (0,1.3)   {PARTITION};
+  \node[op] (p4) at (2.7,1.3) {PARTITION};
+  \node[op] (c2) at (0,2.6)   {CONCAT};
+  \node[op] (c5) at (2.7,2.6) {CONCAT};
+  \node[top] (t) at (1.35,4.3)
+    {RESULT\_COLLECTOR\\ PROJECTION\\ \textbf{VECTOR\_THRESHOLD\_JOIN}\\[1pt]
+     {\scriptsize type: INNER}};
+  \draw[flow] (s0) -- (p1);
+  \draw[flow] (s3) -- (p4);
+  \draw[flow] (p1) -- (c2);
+  \draw[flow] (p4) -- (c5);
+  \draw[flow] (c2) -- (t.south -| c2) node[blabel, midway, left]  {FULL};
+  \draw[flow] (c5) -- (t.south -| c5) node[blabel, midway, right] {FULL};
+\end{tikzpicture}
+
+{\small (a) distance-predicate join}
+\end{minipage}
+\hfill
+% ---- (b) equi-join ----
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\begin{lstlisting}[language=SQL, basicstyle=\ttfamily\scriptsize, frame=none,
+                   aboveskip=0pt, belowskip=4pt]
+SELECT l.id, r.id
+FROM l JOIN r ON l.id = r.id;
+\end{lstlisting}
+\begin{tikzpicture}
+  \node[op] (s0) at (0,0)     {GPU\_SCAN};
+  \node[op] (s3) at (2.7,0)   {GPU\_SCAN};
+  \node[op] (p1) at (0,1.3)   {PARTITION};
+  \node[op] (p4) at (2.7,1.3) {PARTITION};
+  \node[op] (c2) at (0,2.6)   {CONCAT};
+  \node[op] (c5) at (2.7,2.6) {CONCAT};
+  \node[top] (t) at (1.35,4.3)
+    {RESULT\_COLLECTOR\\ PROJECTION\\ \textbf{HASH\_JOIN}\\[1pt]
+     {\scriptsize type: INNER}};
+  \draw[flow] (s0) -- (p1);
+  \draw[flow] (s3) -- (p4);
+  \draw[flow] (p1) -- (c2);
+  \draw[flow] (p4) -- (c5);
+  \draw[flow] (c2) -- (t.south -| c2) node[blabel, midway, left]  {PARTIAL};
+  \draw[flow] (c5) -- (t.south -| c5) node[blabel, midway, right] {PARTIAL};
+\end{tikzpicture}
+
+{\small (b) equi-join}
+\end{minipage}
+\caption{The same query shape under two join predicates. The distance-predicate
+join~(a) and the equi-join~(b) produce identical operator trees; only the join
+node and its input barriers differ. The vector threshold join consumes both
+sides in full because it walks every batch pair, whereas the hash join streams
+its probe side with a partial barrier.}
+\label{fig:native-plans}
+\end{figure*}
