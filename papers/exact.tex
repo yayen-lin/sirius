@@ -1,43 +1,84 @@
 \begin{figure}
   \centering
+  \resizebox{\columnwidth}{!}{%
   \begin{tikzpicture}[
       font=\small\sffamily,
-      tile/.style={draw, minimum size=0.9cm},
-      hot/.style={tile, fill=black!12},
-      box/.style={draw, rounded corners=2pt, align=left,
-                  minimum width=2.9cm, minimum height=1.9cm},
-      ax/.style={font=\small\sffamily\bfseries},
-      flow/.style={-{Latex[length=2.2mm]}, thick, black!65},
+      tbl/.style={draw, rounded corners=2pt, align=center, minimum width=1.9cm,
+                  minimum height=0.7cm, font=\footnotesize\sffamily},
+      stp/.style={draw, rounded corners=2pt, align=center, fill=black!4,
+                  minimum width=2.6cm, minimum height=1.1cm, font=\scriptsize\sffamily},
+      cl/.style={draw, rounded corners=2pt, align=center, minimum width=1.9cm,
+                 minimum height=0.8cm, font=\scriptsize\sffamily},
+      jn/.style={draw, rounded corners=2pt, align=center, fill=black!8,
+                 minimum width=1.9cm, minimum height=0.8cm, font=\scriptsize\sffamily},
+      red/.style={draw, rounded corners=2pt, align=center, minimum width=5.4cm,
+                  minimum height=0.9cm, font=\scriptsize\sffamily},
+      outp/.style={draw, rounded corners=2pt, align=center, minimum width=1.9cm,
+                   minimum height=0.6cm, font=\footnotesize\sffamily},
+      flow/.style={-{Latex[length=2mm]}, thick},
+      setup/.style={-{Latex[length=1.6mm]}, black!45},
+      grp/.style={font=\scriptsize\bfseries\sffamily, rotate=90},
     ]
 
-    % probe (R) rows by corpus (S) columns, the pairwise-distance space
-    \foreach \i in {0,1,2} {
-      \foreach \j in {0,1,2} {
-        \node[tile] (t\i\j) at (\j*0.92, -\i*0.92) {};
-      }
+    % ---- inputs ----
+    \node[tbl] (corpus) at (1.5,10.2) {corpus};
+    \node[tbl] (probe)  at (4.5,10.2) {probe};
+
+    % ---- steps 1 & 2 ----
+    \node[stp] (s1) at (1.5,8.4) {\textbf{Step 1}\\ cluster corpus\\ k-means into $N$ clusters};
+    \node[stp] (s2) at (4.5,8.4) {\textbf{Step 2}\\ cocluster probe\\ each row to $p$ nearest clusters};
+
+    % ---- clusters ----
+    \node[cl] (c1) at (0,6.4) {cluster 1\\ \scriptsize corpus + probe};
+    \node[cl] (c2) at (3,6.4) {cluster 2\\ \scriptsize corpus + probe};
+    \node[cl] (c3) at (6,6.4) {cluster 3\\ \scriptsize corpus + probe};
+
+    % ---- step 3: exact join, per cluster ----
+    \node[jn] (j1) at (0,4.5) {\textbf{Step 3}\\ (in-cluster) exact join};
+    \node[jn] (j2) at (3,4.5) {\textbf{Step 3}\\ (in-cluster) exact join};
+    \node[jn] (j3) at (6,4.5) {\textbf{Step 3}\\ (in-cluster) exact join};
+
+    % ---- step 4: reduction (local + global) ----
+    \node[red] (r) at (3,2.6)
+      {\textbf{Step 4}\\ local/global reduction};
+
+    % ---- output ----
+    \node[outp] (out) at (3,1.1) {result};
+
+    % ---- setup edges (clustering fan) ----
+    \draw[setup] (corpus) -- (s1);
+    \draw[setup] (probe)  -- (s2);
+    \foreach \c in {c1,c2,c3} {
+      \draw[setup] (s1) -- (\c);
+      \draw[setup] (s2) -- (\c);
     }
-    % one tile in flight
-    \node[hot] at (0.92,-0.92) {};
 
-    % axes
-    \node[ax, anchor=south] at (0.92, 0.72) {corpus $S$};
-    \node[ax, rotate=90, anchor=south] at (-0.78, -0.92) {probe $R$};
+    % ---- main flow ----
+    \draw[flow] (c1) -- (j1);
+    \draw[flow] (c2) -- (j2);
+    \draw[flow] (c3) -- (j3);
+    \draw[flow] (j1) -- (r);
+    \draw[flow] (j2) -- (r);
+    \draw[flow] (j3) -- (r);
+    \draw[flow] (r)  -- (out);
 
-    % reduce stage
-    \node[box] (red) at (5.4,-0.92)
-      {\textbf{reduce}\\[2pt]
-       per-row top-$k$\\
-       global top-$k$\\
-       threshold $\varepsilon$};
+    % ---- grouping boxes ----
+    \node[draw, dashed, rounded corners, inner sep=8pt, fit=(j1)(j3)(r)] (exactbox) {};
+    \node[draw, dotted, thick, rounded corners, inner sep=12pt,
+          fit=(s1)(s2)(c1)(c3)(j1)(j3)(r)] (approxbox) {};
 
-    \draw[flow] (2.30,-0.92) -- node[above, font=\scriptsize\sffamily] {reduce} (red.west);
-  \end{tikzpicture}
-  \caption{The exact vector join reads both tables as batches and walks
-    the probe-by-corpus space one batch pair at a time. Each pair
-    (shaded tile) runs a brute-force top-$k$: the pairwise distances are
-    computed with a GEMM, tiled internally, and never materialized in
-    full. A reduction over the per-pair results yields the answer, the
-    $k$ nearest per probe row, the $k$ nearest pairs overall, or every
-    pair within a threshold $\varepsilon$.}
+    % ---- group labels in the side margins (no arrow/box overlap) ----
+    \node[grp] at ([xshift=-13pt]approxbox.west) {Approximate join (steps 1--4)};
+    \node[grp] at ([xshift=13pt]exactbox.east)   {Exact join (steps 3--4)};
+  \end{tikzpicture}}
+  \caption{The vector join in four steps. Steps~3--4, the in-cluster
+    brute-force join and its reduction, are the \emph{exact} join; the
+    \emph{approximate} join wraps them in steps~1--2, which k-means cluster the
+    corpus and route each probe row to its $p$ nearest clusters so the join runs
+    per cluster. The exact join of Section~\ref{sec:technical-1:-exact} is this
+    inner box over a single cluster, the whole table: every probe batch is
+    brute-force joined against every corpus batch, then reduced. The reduction
+    (step~4) runs pushed down inside each cluster (per-row top-$k$,
+    max-distance) and again globally across clusters (global top-$k$).}
   \label{fig:exact}
 \end{figure}
