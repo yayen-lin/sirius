@@ -145,7 +145,7 @@ Vector join is the workload that already appears throughout analytical pipelines
 In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points; pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{AbbasSemDeDup23}.
 In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings rather than by exact keys, which turns a classically hard matching problem into an embedding similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
 In retrieval and recommendation, an entire batch of user or query embeddings is scored against a catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
-In every case the work is inherently batched
+In every case the work is inherently batched.
 
 The demand is now surfacing in native SQL language itself.
 Apache Spark has a standing proposal for a \texttt{NEAREST BY} top-$k$ ranking join~\cite{ApacheSparkJIRA56395}, Databricks SQL already ships a \texttt{NEAREST BY} clause~\cite{DatabricksNearestBy26}, and recently DuckDB~\cite{DuckDBNearestByPR24137}.
