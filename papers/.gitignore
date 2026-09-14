@@ -1,0 +1,14 @@
+# Reference PDFs and compiled output
+*.pdf
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.out
+*.log
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+out/
