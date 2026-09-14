@@ -261,13 +261,6 @@ The output buffer starts empty and grows geometrically as each tile's survivors 
 Each tile is filtered the moment it is computed, so only one tile and the surviving pairs sit in memory at any point.
 Cosine runs through the same GEMM path with no need to normalize the vectors first.
 
-Our approach is to reuse the same \texttt{brute\_force::search} kernel but replace the top-$k$ step with a threshold filter (\texttt{thrust::copy\_if}) that keeps every pair whose distance is within $\varepsilon$.
-In doing so we get to keep the nice properties that brute-force search provides and achieve what we wanted to achieve.
-The result is an edge list, one row per surviving (probe, corpus) pair carrying the two row ids and their distance.
-The output buffer starts empty and grows geometrically as each tile's survivors are appended, which works the same way as a dynamic array, so the total copy work stays linear in the number of surviving pairs and no counting pass is needed.
-Each tile is filtered the moment it is computed, so only one tile and the surviving pairs sit in memory at any point.
-Cosine runs through the same GEMM path with no need to normalize the vectors first.
-
 \subsection{Plain SQL and Discussion}\label{subsec:exact-native}
 
 \input{native-plans}
