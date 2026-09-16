@@ -140,13 +140,14 @@ partition_strategy sirius_physical_vector_threshold_join::get_partition_strategy
 
 std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::get_next_task_input_data()
 {
-  // Mirrors sirius_physical_nested_loop_join::get_next_task_input_data: enumerate every
-  // (left batch, right batch) pair, popping the last consumer of each batch.
+  // Enumerate every (left batch, right batch) pair, popping the last consumer of each batch with
+  // a persistent cursor advances one pair per call.
   std::lock_guard<std::mutex> lg(batches_to_processed_mutex);
 
-  if (left_batch_ids.empty() && right_batch_ids.empty()) {
-    auto* default_port = get_port("default");
-    auto* build_port   = get_port("build");
+  auto* default_port = get_port("default");
+  auto* build_port   = get_port("build");
+
+  if (!ids_initialized_) {
     if (!default_port || !default_port->repo || !build_port || !build_port->repo) {
       return nullptr;
     }
@@ -160,48 +161,52 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::get_next_t
     for (size_t i = 0; i < default_port->repo->num_partitions(); i++) {
       left_batch_ids.push_back(default_port->repo->get_batch_ids(i));
       right_batch_ids.push_back(build_port->repo->get_batch_ids(i));
-      num_batches_to_process += left_batch_ids[i].size() * right_batch_ids[i].size();
+    }
+    ids_initialized_ = true;
+    // Park the cursor on the first partition that actually has a pair to process.
+    while (cursor_partition_ < left_batch_ids.size() &&
+           (left_batch_ids[cursor_partition_].empty() ||
+            right_batch_ids[cursor_partition_].empty())) {
+      cursor_partition_++;
     }
   }
 
-  if (current_partition_index >= num_batches_to_process) { return nullptr; }
+  if (cursor_partition_ >= left_batch_ids.size()) { return nullptr; }
 
-  size_t batch_index = current_partition_index++;
+  auto const p          = cursor_partition_;
+  auto const li         = cursor_left_;
+  auto const ri         = cursor_right_;
+  auto const& lids      = left_batch_ids[p];
+  auto const& rids      = right_batch_ids[p];
+  bool const last_right = ri + 1 == rids.size();
+  bool const last_left  = li + 1 == lids.size();
 
   std::vector<std::shared_ptr<cucascade::data_batch>> input_batch;
   input_batch.reserve(2);
-  size_t counter     = 0;
-  auto* default_port = get_port("default");
-  auto* build_port   = get_port("build");
-  for (size_t partition_idx = 0; partition_idx < left_batch_ids.size(); partition_idx++) {
-    size_t left_counter = 0;
-    for (auto& left_batch_id : left_batch_ids[partition_idx]) {
-      size_t right_counter = 0;
-      for (auto& right_batch_id : right_batch_ids[partition_idx]) {
-        if (counter == batch_index) {
-          if (right_counter == right_batch_ids[partition_idx].size() - 1) {
-            input_batch.push_back(
-              default_port->repo->pop_data_batch_by_id(left_batch_id, partition_idx));
-          } else {
-            input_batch.push_back(
-              default_port->repo->get_data_batch_by_id(left_batch_id, partition_idx));
-          }
-          if (left_counter == left_batch_ids[partition_idx].size() - 1) {
-            input_batch.push_back(
-              build_port->repo->pop_data_batch_by_id(right_batch_id, partition_idx));
-          } else {
-            input_batch.push_back(
-              build_port->repo->get_data_batch_by_id(right_batch_id, partition_idx));
-          }
-          return std::make_unique<pipelineable_operator_data>(input_batch);
-        }
-        right_counter++;
-        counter++;
-      }
-      left_counter++;
+  // Left batch is reused across every right batch, so release it only on the last right.
+  input_batch.push_back(last_right ? default_port->repo->pop_data_batch_by_id(lids[li], p)
+                                    : default_port->repo->get_data_batch_by_id(lids[li], p));
+  // Right batch is reused across every left batch, so release it only on the last left.
+  input_batch.push_back(last_left ? build_port->repo->pop_data_batch_by_id(rids[ri], p)
+                                   : build_port->repo->get_data_batch_by_id(rids[ri], p));
+
+  // Advance one pair: inner over right, then left, then skip to the next non-empty partition.
+  cursor_right_++;
+  if (cursor_right_ >= rids.size()) {
+    cursor_right_ = 0;
+    cursor_left_++;
+  }
+  if (cursor_left_ >= lids.size()) {
+    cursor_left_ = 0;
+    cursor_partition_++;
+    while (cursor_partition_ < left_batch_ids.size() &&
+           (left_batch_ids[cursor_partition_].empty() ||
+            right_batch_ids[cursor_partition_].empty())) {
+      cursor_partition_++;
     }
   }
-  return nullptr;
+
+  return std::make_unique<pipelineable_operator_data>(std::move(input_batch));
 }
 
 std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(

@@ -109,10 +109,15 @@ class sirius_physical_vector_threshold_join : public sirius_physical_partition_c
 
  protected:
   std::mutex batches_to_processed_mutex;
-  std::size_t current_partition_index = 0;
-  std::size_t num_batches_to_process  = 0;
+  //! Batch-id lists per partition, populated once on the first dispatch.
   std::vector<std::vector<uint64_t>> left_batch_ids;
   std::vector<std::vector<uint64_t>> right_batch_ids;
+  //! Set when the id lists above are populated.
+  bool ids_initialized_ = false;
+  //! Cursor over the (partition, left batch, right batch) pairs
+  std::size_t cursor_partition_ = 0;
+  std::size_t cursor_left_      = 0;
+  std::size_t cursor_right_     = 0;
 
   //! Set by enable_distance_output(): emit the pairwise distance as a trailing FLOAT column.
   bool emit_distance_ = false;
