@@ -1,0 +1,23 @@
+\section{Introduction}\label{sec:introduction}
+
+% will come back and visit this section because it's the summary of the paper, for now just put bullet points on what we wanna talk about
+
+\yxy{very rough intro outline. needs refinement and expansion.}
+
+- vector is becoming a default datatype in modern database systems. It enables new use cases.
+
+- most existing vector databases focus on vector search. which is great but limited to point requests.
+
+- we are seeing a growing trend of vector join.
+
+- compared to vector search, vector join has several unique characteristics:
+
++ very compute extensive.
+
++ indexes should be built at query execution time, in the same way that hash index are built at query execution time in OLAP engines.
+
++ hopefully a third one so it looks nicer :-)
+
+- we believe GPU is a better platform for vector join compared to CPU due to the reasons above. Furthermore, the vector join pattern can be accelerated using tensor cores on GPU.
+
+- We built xxxxx [explain the technical contributions]

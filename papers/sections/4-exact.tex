@@ -1,0 +1,85 @@
+\section{Technical \#1: Exact}\label{sec:technical-1:-exact}
+
+\input{approx-exact}
+
+\subsection{Super Sirius}\label{subsec:super-sirius}
+
+Sirius is a GPU-native SQL engine.
+It builds on established NVIDIA libraries such as \emph{cuDF} for columnar relational operators and \emph{RMM} for GPU memory allocation, and it ranked first on ClickBench just last year~\cite{SiriusClickBench25}.
+It is designed as a drop-in accelerator, and its modular codebase is what lets new operators and features integrate cleanly.
+The vector join is one such operator, and it inherits the engine's execution machinery for free.
+
+Super Sirius is the execution layer beneath Sirius~\cite{SuperSiriusDocs}.
+It compiles a query into pipelines of physical operators and runs them as tasks over GPU and CPU thread pools, and several of its components map directly onto the building blocks a vector join needs.
+The \emph{task creator} turns each ready batch pair into its own task, so the join's independent pairs become independent units of work with no scheduling logic of our own.
+The \emph{pipeline executor} runs those tasks concurrently across a thread pool, each on its own CUDA stream, so the GPU stays saturated with pair computations; it also reserves memory per task, so a pair that does not fit waits or spills while the query keeps running.
+The \emph{task scheduler} dispatches the tasks over the available threads, and on a multi-GPU node it spreads them across GPUs in round-robin, so the pair grid fans out over the whole machine.
+The \emph{downgrade executor} owns the lifetime of the batches flowing between operators and spills them across GPU, host, and disk tiers under memory pressure by way of cuCascade, so the join stays within a bounded footprint.
+Finally, the \emph{result collector} streams the result back to clients in batches, so a larger-than-memory result never has to materialize at once.
+
+\subsection{Design Overview}\label{subsec:exact-design}
+
+We began with the exact join.
+It is the most straightforward to build, and it is the foundation the approximate join extends in the next section.
+For now the join is reached through a table function and requires both tables pinned in GPU memory.
+This is an implementation convenience we return to in Section~\ref{subsec:exact-native}: once a vector join gains a matchable SQL surface, the engine feeds and tiers its batches the same way it does for every other operator.
+
+The join returns one of the three reduction outcomes from Section~\ref{subsec:the-vector-join}, the $k$ nearest per probe row, the $k$ nearest pairs overall, or every pair within a threshold $\varepsilon$, and we express all three as Sirius operators.
+When the corpus fits in GPU memory, the exact join is a brute-force walk over batches (Figure~\ref{fig:exact}).
+Sirius reads both tables as batches, so the probe side arrives as a batch of query rows rather than a single query vector, and a brute-force search over one such batch is already a top-$k$ join between it and one corpus batch.
+The join visits every pair of a probe batch and a corpus batch, runs top-$k$ on the pair, and merges each probe row's results across all corpus batches into its final top-$k$.
+
+Our work centers on \texttt{cuvs::neighbors::brute\_force::search}, which has three properties that make it the right primitive.
+The first is that it is inherently batched, which fits the vector join directly.
+The second is internal tiling: the search never forms the full pairwise distance matrix between the two batches; it splits the work into tiles, computes one tile of distances at a time, selects that tile's top-$k$, and merges across tiles.
+This keeps memory bounded, since only a single tile is resident at any moment rather than the whole probe-by-corpus block, so the intermediate cannot blow up as the corpus grows.
+And the tile size is chosen to fit the GPU's resources, so each tile runs at high occupancy and the search stays fast.
+The third property is that the distance computation maps onto GEMM: for the common metrics a tile of pairwise distances reduces to a dense matrix multiply of the probe and corpus vectors, followed by a norm correction, which is the operation the GPU runs fastest.
+The one limitation is that the API serves only a top-$k$ search, whose output size is fixed per query.
+The threshold join has no such bound, so no top-$k$ API fits it.
+We therefore wrote our own kernel that mirrors the same tiled, GEMM-based structure and swaps the per-tile top-$k$ selection for a threshold filter.
+
+\subsection{Operators and Search Modes}\label{subsec:exact-search-modes}
+
+A relational join has three moving parts: a predicate that ranks the candidate pairs, a reduction that keeps the survivors, and a projection that fetches their columns.
+The vector join has the same anatomy, and we give each part its own operator.
+The \emph{select} operator is the leaf and carries the predicate: it holds the batch-pair grid and runs the per-pair brute-force search that ranks each pair by distance, so the heavy GEMM-bound work stays parallel and confined to the leaf.
+The \emph{reduce} operator performs the per-row reduction and merges a probe batch's per-pair partials into each row's surviving top-$k$.
+For global mode the reduction happens in a downstream pipeline, using Sirius's existing \texttt{TOP\_N} and \texttt{MERGE\_TOP\_N} operators.
+The \emph{materialize} operator is the projection and runs last, so only the pairs that survive the reduction pull their output columns, the same discipline as pushing a projection below a join.
+
+\paragraph{Per-row} Per-row returns the $k$ nearest corpus rows for each probe row, and it is the base the other two modes build on.
+In the select operator, each batch pair goes through cuVS: \texttt{brute\_force::build} takes the corpus batch as a lightweight index and precomputes its vector norms so the search need not recompute them, and \texttt{brute\_force::search} returns, for each probe row in the pair, its $k$ nearest rows within that corpus batch.
+This search is where the GEMM and the internal tiling live, so a pair is scored without ever forming its distance block in full.
+Each probe row then holds one top-$k$ per corpus batch, and in the reduce operator \texttt{knn\_merge\_parts} merges those per-batch lists into the row's final top-$k$ over the whole corpus.
+
+\paragraph{Global} Global returns the $k$ nearest pairs across the whole join.
+It builds on the same per-pair search, but the reduce operator forwards the per-pair candidates without a per-row merge, and the engine's existing \texttt{TOP\_N} and \texttt{MERGE\_TOP\_N} operators reduce them into the single global top-$k$.
+The materialize operator runs after this reduction and gathers columns for only the $k$ surviving pairs.
+
+\paragraph{Threshold} Threshold returns every pair whose distance falls within a radius $\varepsilon$.
+Its output size cannot be bounded ahead of time as top-$k$ does, and the number of pairs within $\varepsilon$ depends on the data and the radius.
+cuVS's search APIs assume a bounded output, so none of them fits a radius join directly.
+We therefore wrote our own kernel that mirrors \texttt{brute\_force::search} and replaces the top-$k$ selection with a threshold filter (\texttt{thrust::copy\_if}) that keeps every pair whose distance is within $\varepsilon$.
+This preserves the two properties we want, internal tiling and GEMM, while removing the fixed output count that a top-$k$ search imposes.
+The result is an edge list, one row per surviving (probe, corpus) pair carrying the two row ids and their distance.
+The output buffer starts empty and grows geometrically as each tile's survivors are appended, which works the same way as a dynamic array, so the total copy work stays linear in the number of surviving pairs and no counting pass is needed.
+Each tile is filtered the moment it is computed, so only one tile and the surviving pairs sit in memory at any point.
+Cosine runs through the same GEMM path with no need to normalize the vectors first.
+
+\subsection{Plain SQL and Discussion}\label{subsec:exact-native}
+
+\input{native-plans}
+
+% again supporting our argument that vector join is a relational join
+Currently only the threshold join reaches the engine through plain SQL with no special syntax.
+As the Figure~\ref{fig:native-plans} shows, its operator tree is identical to a hash join on the same query: a vector join behaves like an ordinary relational join, running the same plan with a different kernel at the join node.
+The one plan-level difference is the barrier, as the threshold join consumes both sides in full since it walks every batch pair, whereas the hash join streams its probe side.
+
+% discussion about what if the tables don't fit in gpu memory
+Because it has a SQL surface, the join arrives through the engine's ordinary path: its inputs are fed by the scanner as batches and tiered by the downgrade executor.
+Neither table has to be pinned or fit in GPU memory, because the engine streams and spills the batches as it does for every other operator.
+
+% lastly our situation now
+Top-$k$ per-row and global do not have this surface yet.
+Their syntax sugar lowers to a lateral join, whose plan shape the interceptor cannot match, so today they are reached through a table function that requires both tables to be pinned in GPU memory.
