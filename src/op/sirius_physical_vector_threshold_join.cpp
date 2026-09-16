@@ -27,7 +27,6 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/scalar/scalar.hpp>
@@ -40,7 +39,9 @@
 
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
 #include <functional>
+#include <limits>
 #include <vector>
 
 namespace sirius {
@@ -56,7 +57,8 @@ sirius_physical_vector_threshold_join::sirius_physical_vector_threshold_join(
   std::string metric,
   std::int64_t dim,
   duckdb::JoinType join_type,
-  std::size_t estimated_cardinality)
+  std::size_t estimated_cardinality,
+  uint64_t batch_bytes)
   : sirius_physical_partition_consumer_operator(SiriusPhysicalOperatorType::VECTOR_THRESHOLD_JOIN,
                                                 sirius::from_duckdb_vec(op.types),
                                                 estimated_cardinality),
@@ -65,7 +67,8 @@ sirius_physical_vector_threshold_join::sirius_physical_vector_threshold_join(
     cutoff(cutoff),
     metric(std::move(metric)),
     dim(dim),
-    join_type(join_type)
+    join_type(join_type),
+    batch_bytes(batch_bytes)
 {
   children.push_back(std::move(left));
   children.push_back(std::move(right));
@@ -238,10 +241,10 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
   }
 
   // Assemble one output table from a left gather-map and an equal-length right gather-map, taking
-  // the plan's output columns in [left..., right...] order (mirrors nested_loop_join output).
+  // the plan's output columns in [left..., right...] order.
   // When emit_distance_ is set the caller passes a same-length FLOAT column of per-pair distances,
-  // appended after the right columns at output index n_left + n_right. The unmatched (LEFT) pass
-  // passes an all-NULL distance column so the two parts share one schema for the concatenate below.
+  // appended after the right columns at output index n_left + n_right. The unmatched pass passes
+  // an all-NULL distance column so the matched and unmatched output batches share one schema.
   auto assemble = [&](cudf::column_view const& left_map,
                       cudf::column_view const& right_map,
                       cudf::out_of_bounds_policy right_policy,
@@ -264,7 +267,50 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
     return std::make_unique<cudf::table>(std::move(cols));
   };
 
-  std::vector<std::unique_ptr<cudf::table>> output_parts;
+  // Sizes its own output batches and cap each emitted batch by the engine's byte budget, so
+  // a large edge list becomes several normal-sized batches instead of one huge one.
+  std::vector<std::shared_ptr<cucascade::data_batch>> out_batches;
+  auto const left_row_bytes =
+    (left_batch.get_data() && n_left > 0)
+      ? left_batch.get_data()->get_size_in_bytes() / static_cast<std::size_t>(n_left)
+      : std::size_t{0};
+  auto const right_row_bytes =
+    (right_batch.get_data() && right.num_rows() > 0)
+      ? right_batch.get_data()->get_size_in_bytes() / static_cast<std::size_t>(right.num_rows())
+      : std::size_t{0};
+  auto const bytes_per_row = std::max<std::size_t>(
+    1, left_row_bytes + right_row_bytes + (emit_distance_ ? sizeof(float) : 0));
+  auto const budget_rows   = std::max<std::size_t>(1, batch_bytes / bytes_per_row);
+  auto const size_type_cap =
+    dim > 0 ? static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max() / dim)
+            : std::numeric_limits<std::size_t>::max();
+  auto const max_rows = std::min(budget_rows, size_type_cap);
+
+  auto emit = [&](cudf::column_view const& left_map,
+                  cudf::column_view const& right_map,
+                  cudf::out_of_bounds_policy right_policy,
+                  std::unique_ptr<cudf::column> distance_col) {
+    auto const total = static_cast<std::size_t>(left_map.size());
+    if (total <= max_rows) {
+      out_batches.push_back(make_data_batch(
+        assemble(left_map, right_map, right_policy, std::move(distance_col)), *space, stream,
+        batch_telemetry()));
+      return;
+    }
+    for (std::size_t start = 0; start < total; start += max_rows) {
+      auto const s = static_cast<cudf::size_type>(start);
+      auto const e = static_cast<cudf::size_type>(std::min(total, start + max_rows));
+      auto lm      = cudf::slice(left_map, {s, e}).front();
+      auto rm      = cudf::slice(right_map, {s, e}).front();
+      std::unique_ptr<cudf::column> dcol;
+      if (emit_distance_ && distance_col) {
+        dcol = std::make_unique<cudf::column>(cudf::slice(distance_col->view(), {s, e}).front(),
+                                              stream, mr);
+      }
+      out_batches.push_back(make_data_batch(assemble(lm, rm, right_policy, std::move(dcol)), *space,
+                                            stream, batch_telemetry()));
+    }
+  };
 
   // Matched pairs: the tiled-GEMM threshold kernel emits an edge list (query_rows = local left row,
   // neighbors = local right row). Skipped when the right side is empty (no matches possible).
@@ -289,9 +335,8 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
         distance_col = std::move(tj.distances);
       }
     }
-    output_parts.push_back(assemble(tj.query_rows->view(), tj.neighbors->view(),
-                                    cudf::out_of_bounds_policy::DONT_CHECK,
-                                    std::move(distance_col)));
+    emit(tj.query_rows->view(), tj.neighbors->view(), cudf::out_of_bounds_policy::DONT_CHECK,
+         std::move(distance_col));
     matched_left_map = std::move(tj.query_rows);
   }
 
@@ -331,23 +376,10 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
                                                static_cast<cudf::size_type>(unmatched_idx.size()),
                                                cudf::mask_state::ALL_NULL, stream, mr);
     }
-    output_parts.push_back(assemble(unmatched_idx, pad->view(),
-                                    cudf::out_of_bounds_policy::NULLIFY, std::move(distance_col)));
+    emit(unmatched_idx, pad->view(), cudf::out_of_bounds_policy::NULLIFY, std::move(distance_col));
   }
 
-  std::unique_ptr<cudf::table> result_table;
-  if (output_parts.size() == 1) {
-    result_table = std::move(output_parts[0]);
-  } else {
-    std::vector<cudf::table_view> views;
-    views.reserve(output_parts.size());
-    for (auto& part : output_parts) { views.push_back(part->view()); }
-    result_table = cudf::concatenate(views, stream, mr);
-  }
-
-  auto batch = make_data_batch(std::move(result_table), *space, stream, batch_telemetry());
-  return std::make_unique<pipelineable_operator_data>(
-    std::vector<std::shared_ptr<cucascade::data_batch>>{std::move(batch)});
+  return std::make_unique<pipelineable_operator_data>(std::move(out_batches));
 }
 
 }  // namespace op

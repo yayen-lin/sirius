@@ -16,6 +16,7 @@
 
 #include "op/sirius_physical_vector_threshold_join.hpp"
 #include "planner/sirius_physical_plan_generator.hpp"
+#include "sirius_context.hpp"
 
 #include "duckdb/common/types.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -167,6 +168,14 @@ sirius_physical_plan_generator::create_plan(duckdb::LogicalAnyJoin& op)
   auto left_child  = create_plan(*op.children[0]);
   auto right_child = create_plan(*op.children[1]);
 
+  // Output batch byte budget, same source the other operators use (see insert_gpu_pipeline_
+  // operators). Falls back to the constructor default when no SiriusContext is registered.
+  sirius::operator_params op_params;
+  auto sirius_ctx = context.registered_state
+                      ? context.registered_state->Get<duckdb::SiriusContext>("sirius_state")
+                      : nullptr;
+  if (sirius_ctx) { op_params = sirius_ctx->get_config().get_operator_params(); }
+
   return duckdb::make_uniq<sirius::op::sirius_physical_vector_threshold_join>(
     op,
     std::move(left_child),
@@ -177,7 +186,8 @@ sirius_physical_plan_generator::create_plan(duckdb::LogicalAnyJoin& op)
     match->metric,
     match->left.dim,
     op.join_type,
-    op.estimated_cardinality);
+    op.estimated_cardinality,
+    op_params.concat_batch_bytes);
 }
 
 }  // namespace sirius::planner

@@ -19,6 +19,7 @@
 #include "duckdb/common/enums/join_type.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "op/sirius_physical_partition_consumer_operator.hpp"
+#include "sirius_config.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -48,16 +49,18 @@ class sirius_physical_vector_threshold_join : public sirius_physical_partition_c
     SiriusPhysicalOperatorType::VECTOR_THRESHOLD_JOIN;
 
  public:
-  sirius_physical_vector_threshold_join(duckdb::LogicalOperator& op,
-                                        duckdb::unique_ptr<sirius_physical_operator> left,
-                                        duckdb::unique_ptr<sirius_physical_operator> right,
-                                        std::size_t left_vector_col_idx,
-                                        std::size_t right_vector_col_idx,
-                                        float cutoff,
-                                        std::string metric,
-                                        std::int64_t dim,
-                                        duckdb::JoinType join_type,
-                                        std::size_t estimated_cardinality);
+  sirius_physical_vector_threshold_join(
+    duckdb::LogicalOperator& op,
+    duckdb::unique_ptr<sirius_physical_operator> left,
+    duckdb::unique_ptr<sirius_physical_operator> right,
+    std::size_t left_vector_col_idx,
+    std::size_t right_vector_col_idx,
+    float cutoff,
+    std::string metric,
+    std::int64_t dim,
+    duckdb::JoinType join_type,
+    std::size_t estimated_cardinality,
+    uint64_t batch_bytes = sirius::config::DEFAULT_CONCAT_BATCH_BYTES);
 
   //! Column index of the FLOAT[dim] vector column within the left (probe) child's output.
   std::size_t left_vector_col_idx;
@@ -71,6 +74,8 @@ class sirius_physical_vector_threshold_join : public sirius_physical_partition_c
   std::int64_t dim;
   //! The join type (INNER for milestone 1).
   duckdb::JoinType join_type;
+  //! Byte budget for each emitted output batch.
+  uint64_t batch_bytes;
 
   //! Output column order: identity over the left child's columns.
   duckdb::vector<std::size_t> left_output_col_idxs;
