@@ -1,0 +1,24 @@
+\section{Background}\label{sec:background}
+
+% facts
+
+\subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
+
+A vector embedding is a fixed-length array of numbers that a machine learning model produces from a piece of data (structured or unstructured) such as a passage of text, an image, an audio, a video, or a pattern.
+The model is trained so that geometric proximity in this vector space corresponds to semantic similarity: semantically similar inputs map to nearby vectors, and unrelated inputs map farther apart.
+Proximity is measured with a distance or similarity function over the vectors, most commonly Euclidean (L2) distance, cosine similarity, or inner product.
+Modern embedding models produce vectors with hundreds to thousands of dimensions, and both the number of embeddings and their dimensionality grow with the size of the dataset and the capacity of the model.
+Because the embedding turns an unstructured object into a point in a metric space, semantic comparison becomes a distance computation over their vectors.
+
+\subsection{Vector Search}\label{subsec:vector-search}
+
+Vector search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.
+A brute-force scan compares the query vector against every vector in the dataset, which is exact but expensive at scale.
+To go faster, systems build an approximate nearest neighbor (ANN) index such as IVF or HNSW, which restricts the search to a small subset of candidates and trades some recall for large speedups.
+Vector search is now a mature and crowded market, served by a number of dedicated engines~\cite{WangMilvus21, PineconeDocs, WeaviateDocs, QdrantDocs, ValdDocs} or integrated into traditional databases~\cite{PgvectorRepo, DuckDBVSS, ClickHouseVSS, SnowflakeVector, BigQueryVectorSearch, SQLServer2025Vector, MySQLHeatWaveVector} on use cases like RAG, recommendation, and image/video/audio search.
+
+\subsection{The Vector Join}\label{subsec:the-vector-join}
+
+While a search answers a point query, a vector \emph{join} answers a set query: given a table $R$ of probe vectors and a table $S$ of corpus vectors, return, for the whole of $R$, the neighbors in $S$ that satisfy a similarity condition.
+The condition takes one of three forms: the $k$ nearest per row of $R$ (per-row top-$k$), the $k$ nearest pairs overall (global top-$k$), or every pair within a distance threshold (a radius join).
+

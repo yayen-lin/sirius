@@ -1,0 +1,39 @@
+\section{Evaluation}\label{sec:evaluation}
+
+% for exact we can show the out of native sql threshold join, with table not fitting in gpu memory
+
+TODO: try CAGRA for in-cluster join for APPROX.
+
+Part I:
+synthetic dataset
+- Just use SIFT with different SF.
+
+Exp1 (everything fit in memory)
+- assume prebuilt index.
+- fix right table, left table size: 1 -> 1k -> full size.
+- EXACT. show vector search/join performance of Sirius vs. DuckDB vs. cuVS. [Andy]
+- APPROX. show vector search/join performance of Sirius vs. DuckDB (HNSW accelerated batched index) vs. cuVS (IVF, CAGRA). [Duke]
+
+
+Exp2 scalability [Duke]
+- Left table = right table = full size (vector join only)
+- scale size from small to large
+- Sirius vs. DuckDB vs. cuVS
+- show both EXACT and APPROX (maybe as separate figures).
+
+[tentative] Exp3. Indexing overhead.
+- how expensive to build index.
+
+Part II:
+Goal: Sirius can run complex queries.
+
+Exp1:
+- Google Amazon. TODO: make it bigger! [Duke]
+Google Amazon: show a few complex queries where only DuckDB and Sirius can run. Compare DuckDB vs. Sirius.
+
+Exp2: dedup
+- GIST1M
+- Get an interesting data set (?) TODO. take a look at SemDedup [Andy].
+run dedup on DuckDB and Sirius.
+
+
