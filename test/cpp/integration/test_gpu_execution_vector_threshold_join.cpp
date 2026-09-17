@@ -213,4 +213,34 @@ TEST_CASE_METHOD(VectorThresholdJoinFixture,
     {2}, 1e-5);
 }
 
+// An ungrouped count(*) directly over the join takes the row-count-only path: the join skips every
+// output-column gather and emits a narrow row-count carrier instead of the FLOAT[dim] vectors. The
+// count must still equal DuckDB's, across INNER / LEFT / cosine / dim-5, and combined with tiling
+// (where the carrier is emitted per tile and, for LEFT, must also count unmatched rows once).
+TEST_CASE_METHOD(VectorThresholdJoinFixture,
+                 "gpu_execution threshold join count(*) row-count-only matches CPU",
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
+{
+  // eps=5 -> 3 pairs, eps=0.5 -> 0 pairs, eps=100 -> all 6 pairs.
+  compare_gpu_vs_cpu("SELECT count(*) FROM l JOIN r ON array_distance(l.v, r.v) <= 5");
+  compare_gpu_vs_cpu("SELECT count(*) FROM l JOIN r ON array_distance(l.v, r.v) <= 0.5");
+  compare_gpu_vs_cpu("SELECT count(*) FROM l JOIN r ON array_distance(l.v, r.v) <= 100");
+  // LEFT count includes unmatched left rows (padded, still counted).
+  compare_gpu_vs_cpu("SELECT count(*) FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 5");
+  compare_gpu_vs_cpu("SELECT count(*) FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 0.5");
+  // cosine and dim-5 exercise the path across metrics / dimensionalities.
+  compare_gpu_vs_cpu(
+    "SELECT count(*) FROM lc JOIN rc ON array_cosine_distance(lc.v, rc.v) <= 0.5");
+  compare_gpu_vs_cpu("SELECT count(*) FROM l5 JOIN r5 ON array_distance(l5.v, r5.v) <= 5");
+
+  // Row-count-only combined with many single-row tiles: the carrier is emitted per tile and the
+  // LEFT unmatched carrier must still be counted exactly once.
+  {
+    query_tile_env_guard const tile{"1"};
+    compare_gpu_vs_cpu("SELECT count(*) FROM l JOIN r ON array_distance(l.v, r.v) <= 5");
+    compare_gpu_vs_cpu("SELECT count(*) FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 5");
+    compare_gpu_vs_cpu("SELECT count(*) FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 0.5");
+  }
+}
+
 }  // namespace

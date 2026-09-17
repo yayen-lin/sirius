@@ -77,6 +77,11 @@ class sirius_physical_vector_threshold_join : public sirius_physical_partition_c
   //! Ask the join to emit the per-pair distance as one extra trailing FLOAT column.
   void enable_distance_output(bool as_similarity);
 
+  //! Ask the join to skip all output-column gathers and emit only a narrow row-count carrier. Set
+  //! by the aggregate planner when the sole consumer is an ungrouped count_star that reads just the
+  //! row count. Shrinks the declared output schema to a single TINYINT column.
+  void set_output_row_count_only();
+
  protected:
   void build_pipelines(pipeline::sirius_pipeline& current,
                        pipeline::sirius_meta_pipeline& meta_pipeline) override;
@@ -110,6 +115,8 @@ class sirius_physical_vector_threshold_join : public sirius_physical_partition_c
   bool emit_distance_ = false;
   //! When emitting the distance, output `1 - distance` instead of the raw metric distance.
   bool emit_distance_as_similarity_ = false;
+  //! when set it skips every output-column gather and emit a 1-column carrier.
+  bool output_row_count_only_ = false;
 };
 
 }  // namespace op

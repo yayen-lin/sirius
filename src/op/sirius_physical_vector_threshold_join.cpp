@@ -109,6 +109,18 @@ void sirius_physical_vector_threshold_join::enable_distance_output(bool as_simil
   types.push_back(sirius::from_duckdb(duckdb::LogicalType::FLOAT));
 }
 
+void sirius_physical_vector_threshold_join::set_output_row_count_only()
+{
+  if (output_row_count_only_) { return; }
+  // Only an ungrouped count_star sets this, and it never also reuses the distance column.
+  D_ASSERT(!emit_distance_);
+  output_row_count_only_ = true;
+  // execute() emits number of result rows, so shrink the declared output schema to match.
+  types.clear();
+  // cuDF INT8 for DuckDB TINYINT.
+  types.push_back(sirius::from_duckdb(duckdb::LogicalType::TINYINT));
+}
+
 //===--------------------------------------------------------------------===//
 // Pipeline Construction
 //===--------------------------------------------------------------------===//
@@ -246,22 +258,23 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
   }
   auto mr = space->get_default_allocator();
 
-  bool const is_left     = join_type == duckdb::JoinType::LEFT;
-  auto const n_left      = static_cast<cudf::size_type>(left.num_rows());
-  bool const right_empty = right.num_rows() == 0;
-
-  // No left rows -> no output. An empty right side yields no matches: INNER emits nothing, while
-  // LEFT still emits every left row padded with NULLs (handled by the unmatched pass below).
-  if (n_left == 0 || (right_empty && !is_left)) {
-    return std::make_unique<pipelineable_operator_data>(
-      std::vector<std::shared_ptr<cucascade::data_batch>>{});
-  }
+  // Collects the output batches this call emits.
+  std::vector<std::shared_ptr<cucascade::data_batch>> out_batches;
 
   // Assemble one output table from a left gather-map and an equal-length right gather-map.
   auto assemble = [&](cudf::column_view const& left_map,
                       cudf::column_view const& right_map,
                       cudf::out_of_bounds_policy right_policy,
                       std::unique_ptr<cudf::column> distance_col) {
+    if (output_row_count_only_) {
+      std::vector<std::unique_ptr<cudf::column>> cols;
+      cols.push_back(cudf::make_numeric_column(cudf::data_type{cudf::type_id::INT8},
+                                               left_map.size(),
+                                               cudf::mask_state::UNALLOCATED,
+                                               stream,
+                                               mr));
+      return std::make_unique<cudf::table>(std::move(cols));
+    }
     auto left_gathered =
       cudf::gather(left, left_map, cudf::out_of_bounds_policy::DONT_CHECK, stream, mr);
     auto right_gathered = cudf::gather(right, right_map, right_policy, stream, mr);
@@ -280,9 +293,39 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
     return std::make_unique<cudf::table>(std::move(cols));
   };
 
+  // Emit one schema-correct zero-row batch. The join must always produce at least one batch: a
+  // downstream aggregate pipeline (e.g. count(*)/sum over the join) waits on the source's batches
+  // to finalize, so a source that emits nothing never completes and the query deadlocks. This
+  // mirrors how the scan path signals end-of-input with an empty batch.
+  auto emit_empty_output = [&]() {
+    auto empty_map = cudf::make_empty_column(cudf::data_type{cudf::type_id::INT32});
+    std::unique_ptr<cudf::column> distance_col;
+    if (emit_distance_) {
+      distance_col = cudf::make_empty_column(cudf::data_type{cudf::type_id::FLOAT32});
+    }
+    out_batches.push_back(make_data_batch(assemble(empty_map->view(),
+                                                   empty_map->view(),
+                                                   cudf::out_of_bounds_policy::DONT_CHECK,
+                                                   std::move(distance_col)),
+                                          *space,
+                                          stream,
+                                          batch_telemetry()));
+  };
+
+  bool const is_left     = join_type == duckdb::JoinType::LEFT;
+  auto const n_left      = static_cast<cudf::size_type>(left.num_rows());
+  bool const right_empty = right.num_rows() == 0;
+
+  // No left rows -> no output. An empty right side yields no matches: INNER emits nothing, while
+  // LEFT still emits every left row padded with NULLs (handled by the unmatched pass below).
+  // Either way emit one empty batch so a downstream aggregate can finalize.
+  if (n_left == 0 || (right_empty && !is_left)) {
+    emit_empty_output();
+    return std::make_unique<pipelineable_operator_data>(std::move(out_batches));
+  }
+
   // Sizes its own output batches and caps each emitted batch by the engine's byte budget, so
   // a large edge list becomes several batches.
-  std::vector<std::shared_ptr<cucascade::data_batch>> out_batches;
   auto const left_row_bytes =
     (left_batch.get_data() && n_left > 0)
       ? left_batch.get_data()->get_size_in_bytes() / static_cast<std::size_t>(n_left)
@@ -291,12 +334,18 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
     (right_batch.get_data() && right.num_rows() > 0)
       ? right_batch.get_data()->get_size_in_bytes() / static_cast<std::size_t>(right.num_rows())
       : std::size_t{0};
-  auto const bytes_per_row = std::max<std::size_t>(
-    1, left_row_bytes + right_row_bytes + (emit_distance_ ? sizeof(float) : 0));
+  // Row-count-only emits a 1-byte carrier, so its per-row size and column-length cap are set by the
+  // carrier, not by the (unused) vector row width.
+  auto const bytes_per_row =
+    output_row_count_only_
+      ? std::size_t{1}
+      : std::max<std::size_t>(
+          1, left_row_bytes + right_row_bytes + (emit_distance_ ? sizeof(float) : 0));
   auto const budget_rows = std::max<std::size_t>(1, batch_bytes / bytes_per_row);
   auto const size_type_cap =
-    dim > 0 ? static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max() / dim)
-            : std::numeric_limits<std::size_t>::max();
+    (!output_row_count_only_ && dim > 0)
+      ? static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max() / dim)
+      : static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max());
   auto const max_rows = std::min(budget_rows, size_type_cap);
 
   auto emit = [&](cudf::column_view const& left_map,
@@ -442,6 +491,10 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
     }
     emit(unmatched_idx, pad->view(), cudf::out_of_bounds_policy::NULLIFY, std::move(distance_col));
   }
+
+  // An INNER join with no matches produces no edges above, so emit one empty batch to signal
+  // end-of-input to a downstream aggregate.
+  if (out_batches.empty()) { emit_empty_output(); }
 
   return std::make_unique<pipelineable_operator_data>(std::move(out_batches));
 }
