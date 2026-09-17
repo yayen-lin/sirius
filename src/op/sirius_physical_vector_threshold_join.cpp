@@ -327,8 +327,6 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
     auto const metric_type =
       vss::join_selection_distance_type_from_metric(metric, /*exact_unexpanded=*/false);
     auto tj = vss::brute_force_threshold(res, dataset, queries, cutoff, metric_type, mr);
-    // Reuse the distances the kernel already computed as the output column. array_cosine_similarity
-    // wants `1 - cosine_distance`; array_distance / array_cosine_distance want the value as-is.
     std::unique_ptr<cudf::column> distance_col;
     if (emit_distance_) {
       if (emit_distance_as_similarity_) {
