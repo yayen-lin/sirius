@@ -24,7 +24,16 @@
 #include <duckdb.hpp>
 #include <utils/gpu_execution_fixture.hpp>
 
+#include <cstdlib>
+
 namespace {
+
+// RAII guard forcing sirius_physical_vector_threshold_join::execute() to split each left batch into
+// tiny query tiles (one row per kernel call), so the multi-tile path runs on these small tables.
+struct query_tile_env_guard {
+  explicit query_tile_env_guard(const char* rows) { setenv("SIRIUS_VSS_QUERY_TILE_ROWS", rows, 1); }
+  ~query_tile_env_guard() { unsetenv("SIRIUS_VSS_QUERY_TILE_ROWS"); }
+};
 
 class VectorThresholdJoinFixture : public sirius::test::GpuExecutionFixture {
  public:
@@ -54,7 +63,7 @@ class VectorThresholdJoinFixture : public sirius::test::GpuExecutionFixture {
 
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution L2 threshold join matches CPU across match-set sizes",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   // eps=5 -> partial (3 pairs), eps=0.5 -> empty, eps=100 -> all 6 pairs.
   compare_gpu_vs_cpu("SELECT l.id, r.id FROM l JOIN r ON array_distance(l.v, r.v) <= 5");
@@ -67,14 +76,14 @@ TEST_CASE_METHOD(VectorThresholdJoinFixture,
 
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution L2 threshold join with dim-5 vectors matches CPU",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   compare_gpu_vs_cpu("SELECT l5.id, r5.id FROM l5 JOIN r5 ON array_distance(l5.v, r5.v) <= 5");
 }
 
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution cosine-distance threshold join matches CPU",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   compare_gpu_vs_cpu(
     "SELECT lc.id, rc.id FROM lc JOIN rc ON array_cosine_distance(lc.v, rc.v) <= 0.5");
@@ -82,7 +91,7 @@ TEST_CASE_METHOD(VectorThresholdJoinFixture,
 
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution cosine-similarity threshold join matches CPU",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   // similarity >= eps  <=>  cosine distance <= 1 - eps; same pairs as the <= 0.5 distance case.
   compare_gpu_vs_cpu(
@@ -94,7 +103,7 @@ TEST_CASE_METHOD(VectorThresholdJoinFixture,
 
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution LEFT threshold join pads unmatched left rows with NULLs",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   // eps=5 -> l.id=1 has no match (padded NULL); eps=0.5 -> every left row unmatched;
   // eps=100 -> every left row matched (no padding).
@@ -114,7 +123,7 @@ TEST_CASE_METHOD(VectorThresholdJoinFixture,
 // (l.id, r.id) and NULLs still compare exactly.
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution threshold join returns array_distance as an output column",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   // eps=100 -> all 6 pairs, so every emitted row carries a distance to check.
   compare_gpu_vs_cpu_approx(
@@ -140,7 +149,7 @@ TEST_CASE_METHOD(VectorThresholdJoinFixture,
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution threshold join returns cosine distance/similarity as an output "
                  "column",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   // cosine distance reused as-is.
   compare_gpu_vs_cpu_approx(
@@ -156,10 +165,48 @@ TEST_CASE_METHOD(VectorThresholdJoinFixture,
 
 TEST_CASE_METHOD(VectorThresholdJoinFixture,
                  "gpu_execution LEFT threshold join returns NULL distance for unmatched left rows",
-                 "[integration][gpu_execution][join][vector_threshold]")
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
 {
   // eps=5 -> l.id=1 is unmatched, so its distance column must be NULL (verified exactly, not
   // approximately). l.id=2,3 have real distances checked within tolerance.
+  compare_gpu_vs_cpu_approx(
+    "SELECT l.id, r.id, array_distance(l.v, r.v) "
+    "FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 5",
+    {2}, 1e-5);
+}
+
+// With the query tile forced to one row per kernel call, execute() splits the left batch into many
+// single-row tiles. The result must stay identical to the untiled CPU answer, which exercises the
+// per-tile bookkeeping: shifting tile-local query rows back to global left indices, accumulating the
+// LEFT matched flag across tiles (including tiles that produce zero edges), and emitting each tile
+// separately. The same queries pass untiled in the cases above, so a divergence here is tiling-only.
+TEST_CASE_METHOD(VectorThresholdJoinFixture,
+                 "gpu_execution threshold join is invariant to query tiling",
+                 "[integration][gpu_execution][join][vss][vector_threshold]")
+{
+  query_tile_env_guard const tile{"1"};
+
+  // INNER across empty / partial / full match sets; the partial case has a leading zero-edge tile.
+  compare_gpu_vs_cpu("SELECT l.id, r.id FROM l JOIN r ON array_distance(l.v, r.v) <= 5");
+  compare_gpu_vs_cpu("SELECT l.id, r.id FROM l JOIN r ON array_distance(l.v, r.v) <= 0.5");
+  compare_gpu_vs_cpu("SELECT l.id, r.id FROM l JOIN r ON array_distance(l.v, r.v) <= 100");
+  compare_gpu_vs_cpu("SELECT count(*) FROM l JOIN r ON array_distance(l.v, r.v) <= 5");
+
+  // LEFT: unmatched left rows must be padded exactly once even though the flag is built across tiles.
+  compare_gpu_vs_cpu("SELECT l.id, r.id FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 5");
+  compare_gpu_vs_cpu("SELECT l.id, r.id FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 0.5");
+  compare_gpu_vs_cpu("SELECT l.id, r.id FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 100");
+
+  // cosine distance under tiling.
+  compare_gpu_vs_cpu(
+    "SELECT lc.id, rc.id FROM lc JOIN rc ON array_cosine_distance(lc.v, rc.v) <= 0.5");
+
+  // Reused distance output column: the per-tile distance must line up with the offset query rows.
+  compare_gpu_vs_cpu_approx(
+    "SELECT l.id, r.id, array_distance(l.v, r.v) FROM l JOIN r ON array_distance(l.v, r.v) <= 100",
+    {2}, 1e-5);
+
+  // LEFT with a reused distance column: unmatched rows keep a NULL distance across tiles.
   compare_gpu_vs_cpu_approx(
     "SELECT l.id, r.id, array_distance(l.v, r.v) "
     "FROM l LEFT JOIN r ON array_distance(l.v, r.v) <= 5",

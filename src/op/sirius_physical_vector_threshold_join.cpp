@@ -17,6 +17,7 @@
 #include "op/sirius_physical_vector_threshold_join.hpp"
 
 #include "data/data_batch_utils.hpp"
+#include "duckdb/planner/operator/logical_join.hpp"
 #include "helper/type_conversions.hpp"
 #include "pipeline/sirius_meta_pipeline.hpp"
 #include "pipeline/sirius_pipeline.hpp"
@@ -40,6 +41,7 @@
 #include <nvtx3/nvtx3.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <vector>
@@ -72,16 +74,26 @@ sirius_physical_vector_threshold_join::sirius_physical_vector_threshold_join(
 {
   children.push_back(std::move(left));
   children.push_back(std::move(right));
-  auto& lhs_types = children[0]->get_types();
-  auto& rhs_types = children[1]->get_types();
-  left_output_col_idxs.reserve(lhs_types.size());
-  for (std::size_t i = 0; i < lhs_types.size(); i++) {
-    left_output_col_idxs.push_back(i);
-  }
-  right_output_col_idxs.reserve(rhs_types.size());
-  for (std::size_t i = 0; i < rhs_types.size(); i++) {
-    right_output_col_idxs.push_back(i);
-  }
+  auto const n_left  = children[0]->get_types().size();
+  auto const n_right = children[1]->get_types().size();
+  auto const& join = op.Cast<duckdb::LogicalJoin>();
+  auto fill        = [](const duckdb::vector<duckdb::idx_t>& projection_map,
+                 std::size_t n_cols,
+                 duckdb::vector<std::size_t>& out) {
+    if (projection_map.empty()) {
+      out.reserve(n_cols);
+      for (std::size_t i = 0; i < n_cols; i++) {
+        out.push_back(i);
+      }
+    } else {
+      out.reserve(projection_map.size());
+      for (auto idx : projection_map) {
+        out.push_back(static_cast<std::size_t>(idx));
+      }
+    }
+  };
+  fill(join.left_projection_map, n_left, left_output_col_idxs);
+  fill(join.right_projection_map, n_right, right_output_col_idxs);
 }
 
 void sirius_physical_vector_threshold_join::enable_distance_output(bool as_similarity)
@@ -142,7 +154,7 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::get_next_t
 {
   // Enumerate every (left batch, right batch) pair, popping the last consumer of each batch with
   // a persistent cursor advances one pair per call.
-  std::lock_guard<std::mutex> lg(batches_to_processed_mutex);
+  std::scoped_lock lg(batches_to_processed_mutex);
 
   auto* default_port = get_port("default");
   auto* build_port   = get_port("build");
@@ -164,9 +176,9 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::get_next_t
     }
     ids_initialized_ = true;
     // Park the cursor on the first partition that actually has a pair to process.
-    while (cursor_partition_ < left_batch_ids.size() &&
-           (left_batch_ids[cursor_partition_].empty() ||
-            right_batch_ids[cursor_partition_].empty())) {
+    while (
+      cursor_partition_ < left_batch_ids.size() &&
+      (left_batch_ids[cursor_partition_].empty() || right_batch_ids[cursor_partition_].empty())) {
       cursor_partition_++;
     }
   }
@@ -185,10 +197,10 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::get_next_t
   input_batch.reserve(2);
   // Left batch is reused across every right batch, so release it only on the last right.
   input_batch.push_back(last_right ? default_port->repo->pop_data_batch_by_id(lids[li], p)
-                                    : default_port->repo->get_data_batch_by_id(lids[li], p));
+                                   : default_port->repo->get_data_batch_by_id(lids[li], p));
   // Right batch is reused across every left batch, so release it only on the last left.
   input_batch.push_back(last_left ? build_port->repo->pop_data_batch_by_id(rids[ri], p)
-                                   : build_port->repo->get_data_batch_by_id(rids[ri], p));
+                                  : build_port->repo->get_data_batch_by_id(rids[ri], p));
 
   // Advance one pair: inner over right, then left, then skip to the next non-empty partition.
   cursor_right_++;
@@ -199,9 +211,9 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::get_next_t
   if (cursor_left_ >= lids.size()) {
     cursor_left_ = 0;
     cursor_partition_++;
-    while (cursor_partition_ < left_batch_ids.size() &&
-           (left_batch_ids[cursor_partition_].empty() ||
-            right_batch_ids[cursor_partition_].empty())) {
+    while (
+      cursor_partition_ < left_batch_ids.size() &&
+      (left_batch_ids[cursor_partition_].empty() || right_batch_ids[cursor_partition_].empty())) {
       cursor_partition_++;
     }
   }
@@ -245,11 +257,7 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
       std::vector<std::shared_ptr<cucascade::data_batch>>{});
   }
 
-  // Assemble one output table from a left gather-map and an equal-length right gather-map, taking
-  // the plan's output columns in [left..., right...] order.
-  // When emit_distance_ is set the caller passes a same-length FLOAT column of per-pair distances,
-  // appended after the right columns at output index n_left + n_right. The unmatched pass passes
-  // an all-NULL distance column so the matched and unmatched output batches share one schema.
+  // Assemble one output table from a left gather-map and an equal-length right gather-map.
   auto assemble = [&](cudf::column_view const& left_map,
                       cudf::column_view const& right_map,
                       cudf::out_of_bounds_policy right_policy,
@@ -272,8 +280,8 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
     return std::make_unique<cudf::table>(std::move(cols));
   };
 
-  // Sizes its own output batches and cap each emitted batch by the engine's byte budget, so
-  // a large edge list becomes several normal-sized batches instead of one huge one.
+  // Sizes its own output batches and caps each emitted batch by the engine's byte budget, so
+  // a large edge list becomes several batches.
   std::vector<std::shared_ptr<cucascade::data_batch>> out_batches;
   auto const left_row_bytes =
     (left_batch.get_data() && n_left > 0)
@@ -285,7 +293,7 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
       : std::size_t{0};
   auto const bytes_per_row = std::max<std::size_t>(
     1, left_row_bytes + right_row_bytes + (emit_distance_ ? sizeof(float) : 0));
-  auto const budget_rows   = std::max<std::size_t>(1, batch_bytes / bytes_per_row);
+  auto const budget_rows = std::max<std::size_t>(1, batch_bytes / bytes_per_row);
   auto const size_type_cap =
     dim > 0 ? static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max() / dim)
             : std::numeric_limits<std::size_t>::max();
@@ -297,9 +305,11 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
                   std::unique_ptr<cudf::column> distance_col) {
     auto const total = static_cast<std::size_t>(left_map.size());
     if (total <= max_rows) {
-      out_batches.push_back(make_data_batch(
-        assemble(left_map, right_map, right_policy, std::move(distance_col)), *space, stream,
-        batch_telemetry()));
+      out_batches.push_back(
+        make_data_batch(assemble(left_map, right_map, right_policy, std::move(distance_col)),
+                        *space,
+                        stream,
+                        batch_telemetry()));
       return;
     }
     for (std::size_t start = 0; start < total; start += max_rows) {
@@ -309,67 +319,116 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
       auto rm      = cudf::slice(right_map, {s, e}).front();
       std::unique_ptr<cudf::column> dcol;
       if (emit_distance_ && distance_col) {
-        dcol = std::make_unique<cudf::column>(cudf::slice(distance_col->view(), {s, e}).front(),
-                                              stream, mr);
+        dcol = std::make_unique<cudf::column>(
+          cudf::slice(distance_col->view(), {s, e}).front(), stream, mr);
       }
-      out_batches.push_back(make_data_batch(assemble(lm, rm, right_policy, std::move(dcol)), *space,
-                                            stream, batch_telemetry()));
+      out_batches.push_back(make_data_batch(
+        assemble(lm, rm, right_policy, std::move(dcol)), *space, stream, batch_telemetry()));
     }
   };
 
-  // Matched pairs: the tiled-GEMM threshold kernel emits an edge list (query_rows = local left row,
-  // neighbors = local right row). Skipped when the right side is empty (no matches possible).
-  std::unique_ptr<cudf::column> matched_left_map;
+  // LEFT join needs to know which left rows matched. Build the flag up front, even when the right
+  // side is empty, so every left row falls through the unmatched pass below. It is filled in per
+  // query tile as edges are produced.
+  std::unique_ptr<cudf::column> matched_flag;
+  if (is_left) {
+    cudf::numeric_scalar<bool> false_scalar(false, true, stream);
+    matched_flag = cudf::make_column_from_scalar(false_scalar, n_left, stream, mr);
+  }
+
   if (!right_empty) {
-    auto const queries = vss::list_column_as_dataset_view(left.column(left_vector_col_idx), dim);
     auto const dataset = vss::list_column_as_dataset_view(right.column(right_vector_col_idx), dim);
     raft::device_resources res{stream};
     auto const metric_type =
       vss::join_selection_distance_type_from_metric(metric, /*exact_unexpanded=*/false);
-    auto tj = vss::brute_force_threshold(res, dataset, queries, cutoff, metric_type, mr);
-    std::unique_ptr<cudf::column> distance_col;
-    if (emit_distance_) {
-      if (emit_distance_as_similarity_) {
-        cudf::numeric_scalar<float> one(1.0F, true, stream);
-        distance_col = cudf::binary_operation(one, tj.distances->view(),
-                                              cudf::binary_operator::SUB,
-                                              cudf::data_type{cudf::type_id::FLOAT32}, stream, mr);
+
+    // Bound each threshold call so its edge list can never exceed a cudf column's int32 length.
+    // A single query row produces at most n_right edges, so keeping query_tile * n_right under the
+    // cap keeps every call's edge columns representable.
+    auto const n_left_sz = static_cast<std::size_t>(n_left);
+    auto const n_right   = static_cast<std::size_t>(right.num_rows());
+    auto const edge_cap  = static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max());
+    auto query_tile = std::max<std::size_t>(1, edge_cap / std::max<std::size_t>(1, n_right));
+    // Test hook
+    if (const char* env = std::getenv("SIRIUS_VSS_QUERY_TILE_ROWS")) {
+      auto const forced = std::strtoull(env, nullptr, 10);
+      if (forced > 0) { query_tile = std::min<std::size_t>(query_tile, forced); }
+    }
+
+    // The queries are a window into the full left column.
+    auto const queries_full =
+      vss::list_column_as_dataset_view(left.column(left_vector_col_idx), dim);
+
+    for (std::size_t s = 0; s < n_left_sz; s += query_tile) {
+      auto const qs      = std::min(query_tile, n_left_sz - s);
+      auto const queries = raft::make_device_matrix_view<const float, int64_t, raft::row_major>(
+        queries_full.data_handle() + static_cast<int64_t>(s) * dim,
+        static_cast<int64_t>(qs),
+        dim);
+      auto tj = vss::brute_force_threshold(res, dataset, queries, cutoff, metric_type, mr);
+      if (tj.query_rows->size() == 0) { continue; }
+
+      // The kernel numbers query rows within the tile (0..qs); shift them to global left indices so
+      // the left gather map addresses the whole left batch.
+      std::unique_ptr<cudf::column> left_map_global;
+      if (s == 0) {
+        left_map_global = std::move(tj.query_rows);
       } else {
-        distance_col = std::move(tj.distances);
+        cudf::numeric_scalar<int64_t> off(static_cast<int64_t>(s), true, stream);
+        left_map_global = cudf::binary_operation(tj.query_rows->view(),
+                                                 off,
+                                                 cudf::binary_operator::ADD,
+                                                 cudf::data_type{cudf::type_id::INT64},
+                                                 stream,
+                                                 mr);
+      }
+
+      std::unique_ptr<cudf::column> distance_col;
+      if (emit_distance_) {
+        if (emit_distance_as_similarity_) {
+          cudf::numeric_scalar<float> one(1.0F, true, stream);
+          distance_col = cudf::binary_operation(one,
+                                                tj.distances->view(),
+                                                cudf::binary_operator::SUB,
+                                                cudf::data_type{cudf::type_id::FLOAT32},
+                                                stream,
+                                                mr);
+        } else {
+          distance_col = std::move(tj.distances);
+        }
+      }
+
+      emit(left_map_global->view(),
+           tj.neighbors->view(),
+           cudf::out_of_bounds_policy::DONT_CHECK,
+           std::move(distance_col));
+
+      if (is_left) {
+        cudf::numeric_scalar<bool> true_scalar(true, true, stream);
+        auto scattered = cudf::scatter({std::ref(static_cast<cudf::scalar const&>(true_scalar))},
+                                       left_map_global->view(),
+                                       cudf::table_view({matched_flag->view()}),
+                                       stream);
+        matched_flag   = std::move(scattered->release()[0]);
       }
     }
-    emit(tj.query_rows->view(), tj.neighbors->view(), cudf::out_of_bounds_policy::DONT_CHECK,
-         std::move(distance_col));
-    matched_left_map = std::move(tj.query_rows);
   }
 
-  // LEFT: append every left row with no match, padded with NULL right columns. (For LEFT the right
-  // side is folded to one batch, so "no match here" means no match at all.)
   if (is_left) {
-    // Per-left-row matched flag: true where the row produced at least one edge.
-    cudf::numeric_scalar<bool> false_scalar(false, true, stream);
-    cudf::numeric_scalar<bool> true_scalar(true, true, stream);
-    auto matched_flag = cudf::make_column_from_scalar(false_scalar, n_left, stream, mr);
-    if (matched_left_map && matched_left_map->size() > 0) {
-      auto scattered =
-        cudf::scatter({std::ref(static_cast<cudf::scalar const&>(true_scalar))},
-                      matched_left_map->view(), cudf::table_view({matched_flag->view()}), stream);
-      matched_flag = std::move(scattered->release()[0]);
-    }
+    // matched_flag was accumulated across the query tiles above; a left row is unmatched wherever
+    // it stayed false.
     auto unmatched_mask =
       cudf::unary_operation(matched_flag->view(), cudf::unary_operator::NOT, stream, mr);
-    // Local left row indices that survived (unmatched), via sequence[0,n_left) filtered by the mask.
+    // Local left row indices that survived (unmatched).
     cudf::numeric_scalar<cudf::size_type> zero(0, true, stream);
     cudf::numeric_scalar<cudf::size_type> one(1, true, stream);
-    auto seq               = cudf::sequence(n_left, zero, one, stream, mr);
-    auto unmatched_idx_tbl = cudf::apply_boolean_mask(
-      cudf::table_view({seq->view()}), unmatched_mask->view(), stream, mr);
+    auto seq = cudf::sequence(n_left, zero, one, stream, mr);
+    auto unmatched_idx_tbl =
+      cudf::apply_boolean_mask(cudf::table_view({seq->view()}), unmatched_mask->view(), stream, mr);
     auto unmatched_idx = unmatched_idx_tbl->get_column(0).view();
-    // All-NULL right columns: gather every right row by an out-of-range index under NULLIFY. Use
-    // the upper bound (num_rows), not -1: this cudf's NULLIFY only nullifies indices >= num_rows,
-    // and treats a negative index as an in-range wrap (returning the last row instead of NULL).
-    cudf::numeric_scalar<cudf::size_type> oob(static_cast<cudf::size_type>(right.num_rows()), true,
-                                              stream);
+    // All null right columns: gather every right row by an out-of-range index under NULLIFY.
+    cudf::numeric_scalar<cudf::size_type> oob(
+      static_cast<cudf::size_type>(right.num_rows()), true, stream);
     auto pad = cudf::make_column_from_scalar(
       oob, static_cast<cudf::size_type>(unmatched_idx.size()), stream, mr);
     // Unmatched left rows have no partner, so their distance is NULL.
@@ -377,7 +436,9 @@ std::unique_ptr<operator_data> sirius_physical_vector_threshold_join::execute(
     if (emit_distance_) {
       distance_col = cudf::make_numeric_column(cudf::data_type{cudf::type_id::FLOAT32},
                                                static_cast<cudf::size_type>(unmatched_idx.size()),
-                                               cudf::mask_state::ALL_NULL, stream, mr);
+                                               cudf::mask_state::ALL_NULL,
+                                               stream,
+                                               mr);
     }
     emit(unmatched_idx, pad->view(), cudf::out_of_bounds_policy::NULLIFY, std::move(distance_col));
   }
