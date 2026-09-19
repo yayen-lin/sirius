@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Usage: ./bench/vjoin/scenario3/run.sh
+# Usage: ./bench/vector/scenario3/run.sh
 
 set -euo pipefail
 
 EPS=0.4
-TIMEOUT=1h          # DuckDB is expected to time out; that is the scenario 3 result
+TIMEOUT=1h # DuckDB is expected to time out
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
-DB="$REPO/bench/vss/data/gist1m.duckdb"
+DB="$REPO/bench/vector/data/gist1m.duckdb"
 
 echo "db=$DB eps=$EPS timeout=$TIMEOUT"
 

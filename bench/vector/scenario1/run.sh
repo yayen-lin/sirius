@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Usage: ./bench/vjoin/scenario1/run.sh
+# Usage: ./bench/vector/scenario1/run.sh
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
-DB="$REPO/bench/vss/data/gist1m.duckdb"
+DB="$REPO/bench/vector/data/gist1m.duckdb"
 
 "$CLI" "$DB" <<'SQL'
 SET gpu_execution = true;
