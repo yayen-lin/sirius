@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Usage: ./bench/vector/scenario3/latency.sh
+# Title: 10k queries join base bigann100m
 
 set -euo pipefail
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Usage: ./bench/vector/scenario1/latency.sh
+# Title: 1000 queries join gist1m
 
 set -euo pipefail
 
