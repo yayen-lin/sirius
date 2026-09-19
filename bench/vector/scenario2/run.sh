@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: ./bench/vjoin/scenario2/run.sh
+# Usage: ./bench/vector/scenario2/run.sh
 
 set -euo pipefail
 
@@ -8,7 +8,7 @@ EPS=250
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
-DB="$REPO/bench/vjoin/data/bigann100m.duckdb"
+DB="$REPO/bench/vector/data/bigann100m.duckdb"
 
 echo "db=$DB probe=$PROBE eps=$EPS"
 
