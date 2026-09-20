@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPS=1
+REPS=10
 EPS=250
 TIMEOUT=20m
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -14,7 +14,7 @@ DATASETS=(
   "bigann1m:$REPO/bench/vector/data/sift1m.duckdb"
   "bigann10m:$REPO/bench/vector/data/bigann10m.duckdb"
   "bigann100m:$REPO/bench/vector/data/bigann100m.duckdb"
-#  "bigann1b:$REPO/bench/vector/data/bigann1b.duckdb"
+  "bigann1b:$REPO/bench/vector/data/bigann1b.duckdb"
 )
 
 echo "probe=queries eps=$EPS reps=$REPS datasets=[$(for d in "${DATASETS[@]}"; do printf '%s ' "${d%%:*}"; done)]"
@@ -82,6 +82,7 @@ for entry in "${DATASETS[@]}"; do
   } | "$CLI" "$DB" | rows >> "$BUF"
 
   # --- DuckDB ---
+  before=$(wc -l < "$BUF")
   if [ "$DUCKDB_DEAD" -eq 1 ]; then
     emit_duckdb_row TIMEOUT
   elif timeout "$TIMEOUT" "$CLI" "$DB" <<SQL | rows >> "$BUF"
@@ -94,7 +95,9 @@ SQL
   then :
   else
     code=$?
-    if [ "$code" -eq 124 ]; then
+    if [ "$(wc -l < "$BUF")" -gt "$before" ]; then
+      [ "$code" -eq 124 ] && DUCKDB_DEAD=1 || true
+    elif [ "$code" -eq 124 ]; then
       DUCKDB_DEAD=1
       emit_duckdb_row TIMEOUT
     else
@@ -105,4 +108,4 @@ done
 
 { printf "\n%-8s %10s %4s %11s %5s %11s %12s %11s %11s %11s %11s %11s %15s %24s\n" \
     engine corpus reps rows dim probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
-  sort -k7,7n "$BUF"; }
+  sort -k1,1 -k7,7n "$BUF"; }
