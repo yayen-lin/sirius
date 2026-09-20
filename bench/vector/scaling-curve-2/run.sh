@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPS=1
+REPS=10
 EPS=250
 TIMEOUT=20m
 SIRIUS_TIMEOUT=6h
@@ -17,13 +17,13 @@ SIZES=(
   "10k:10000"
   "100k:100000"
   "1m:1000000"
-#  "10m:10000000"
+  "10m:10000000"
 )
 
 echo "selfjoin(sliced) src=$(basename "$SRC") eps=$EPS reps=$REPS sizes=[$(for s in "${SIZES[@]}"; do printf '%s ' "${s%%:*}"; done)]"
 
-query()  { echo "SELECT count(*) FROM (SELECT vec FROM base LIMIT $1) l JOIN (SELECT vec FROM base LIMIT $1) r ON array_distance(l.vec, r.vec) <= $EPS;"; }
-warmup() { echo "SELECT count(*) FROM (SELECT vec FROM base LIMIT 1) l JOIN (SELECT vec FROM base LIMIT $1) r ON array_distance(l.vec, r.vec) <= $EPS;"; }
+query()  { echo "SELECT count(*) FROM (SELECT vec FROM base ORDER BY id LIMIT $1) l JOIN (SELECT vec FROM base ORDER BY id LIMIT $1) r ON array_distance(l.vec, r.vec) <= $EPS;"; }
+warmup() { echo "SELECT count(*) FROM (SELECT vec FROM base ORDER BY id LIMIT 1) l JOIN (SELECT vec FROM base ORDER BY id LIMIT $1) r ON array_distance(l.vec, r.vec) <= $EPS;"; }
 rows() {
   awk -v dim="$DIM" -v probe="$N" -v corpus="$N" -v pairs="$PAIRS" -v dist_ops="$DIST_OPS" '
     /^@@/  { block = substr($0, 3); want=1; next }
@@ -73,6 +73,7 @@ for entry in "${SIZES[@]}"; do
   DIST_OPS=$((PAIRS * DIM))
 
   # --- Sirius ---
+  before=$(wc -l < "$BUF")
   if [ "$SIRIUS_DEAD" -eq 1 ]; then
     emit_row sirius TIMEOUT
   elif {
@@ -88,11 +89,14 @@ for entry in "${SIZES[@]}"; do
   then :
   else
     code=$?
-    if [ "$code" -eq 124 ]; then SIRIUS_DEAD=1; emit_row sirius TIMEOUT
+    if [ "$(wc -l < "$BUF")" -gt "$before" ]; then
+      [ "$code" -eq 124 ] && SIRIUS_DEAD=1 || true
+    elif [ "$code" -eq 124 ]; then SIRIUS_DEAD=1; emit_row sirius TIMEOUT
     else emit_row sirius "ERROR($code)"; fi
   fi
 
   # --- DuckDB ---
+  before=$(wc -l < "$BUF")
   if [ "$DUCKDB_DEAD" -eq 1 ]; then
     emit_row duckdb TIMEOUT
   elif {
@@ -108,11 +112,13 @@ for entry in "${SIZES[@]}"; do
   then :
   else
     code=$?
-    if [ "$code" -eq 124 ]; then DUCKDB_DEAD=1; emit_row duckdb TIMEOUT
+    if [ "$(wc -l < "$BUF")" -gt "$before" ]; then
+      [ "$code" -eq 124 ] && DUCKDB_DEAD=1 || true
+    elif [ "$code" -eq 124 ]; then DUCKDB_DEAD=1; emit_row duckdb TIMEOUT
     else emit_row duckdb "ERROR($code)"; fi
   fi
 done
 
 { printf "\n%-8s %10s %4s %11s %5s %11s %12s %11s %11s %11s %11s %11s %15s %24s\n" \
-    engine size reps rows dim n_left n_right pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
-  sort -k7,7n "$BUF"; }
+    engine size reps rows dim probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
+  sort -k1,1 -k7,7n "$BUF"; }

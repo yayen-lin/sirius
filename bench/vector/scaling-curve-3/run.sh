@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPS=1
+REPS=10
 EPS=0.5
 TIMEOUT=20m
 SIRIUS_TIMEOUT=20m
@@ -34,8 +34,8 @@ rows() {
                dops = dist_ops + 0               # coerce the %g string to a number
                mspo = (dops>0 ? mean/dops : 0)   # ms spent per distance element-op
                gops = (mean>0 ? dops/mean/1e6 : 0) # billion distance element-ops per second
-               printf "%-8s %5s %4d %12s %11s %12s %11g %11g %11.1f %11.1f %11.1f %15.10f %24.2f\n",
-                      a[1], a[2], n[b], (b in rows ? rows[b] : "-"),
+               printf "%-8s %10s %4d %11s %5s %11s %12s %11g %11g %11.1f %11.1f %11.1f %15.10f %24.2f\n",
+                      a[1], a[2], n[b], (b in rows ? rows[b] : "-"), "",
                       probe, corpus, pairs+0, dist_ops+0,
                       1000*mn[b], mean, 1000*mx[b],
                       mspo, gops } }
@@ -48,8 +48,8 @@ trap 'rm -f "$BUF"' EXIT
 # Emit a placeholder when an engine times out
 emit_row() {
   echo "$1 $LABEL: $2" >&2
-  printf "%-8s %5s %4d %12s %11s %12s %11g %11g %11s %11s %11s %15s %24s\n" \
-    "$1" "$LABEL" "$REPS" "$2" "$OUTER" "$INNER" "$PAIRS" "$DIST_OPS" \
+  printf "%-8s %10s %4d %11s %5s %11s %12s %11g %11g %11s %11s %11s %15s %24s\n" \
+    "$1" "$LABEL" "$REPS" "$2" "" "$OUTER" "$INNER" "$PAIRS" "$DIST_OPS" \
     "$2" "$2" "$2" "-" "-" >> "$BUF"
 }
 
@@ -67,6 +67,7 @@ for D in "${DIMS[@]}"; do
   DIST_OPS=$((PAIRS * DIM))
 
   # --- Sirius ---
+  before=$(wc -l < "$BUF")
   if [ "$SIRIUS_DEAD" -eq 1 ]; then
     emit_row sirius TIMEOUT
   elif {
@@ -82,11 +83,14 @@ for D in "${DIMS[@]}"; do
   then :
   else
     code=$?
-    if [ "$code" -eq 124 ]; then SIRIUS_DEAD=1; emit_row sirius TIMEOUT
+    if [ "$(wc -l < "$BUF")" -gt "$before" ]; then
+      [ "$code" -eq 124 ] && SIRIUS_DEAD=1 || true
+    elif [ "$code" -eq 124 ]; then SIRIUS_DEAD=1; emit_row sirius TIMEOUT
     else emit_row sirius "ERROR($code)"; fi
   fi
 
   # --- DuckDB ---
+  before=$(wc -l < "$BUF")
   if [ "$DUCKDB_DEAD" -eq 1 ]; then
     emit_row duckdb TIMEOUT
   elif {
@@ -102,11 +106,13 @@ for D in "${DIMS[@]}"; do
   then :
   else
     code=$?
-    if [ "$code" -eq 124 ]; then DUCKDB_DEAD=1; emit_row duckdb TIMEOUT
+    if [ "$(wc -l < "$BUF")" -gt "$before" ]; then
+      [ "$code" -eq 124 ] && DUCKDB_DEAD=1 || true
+    elif [ "$code" -eq 124 ]; then DUCKDB_DEAD=1; emit_row duckdb TIMEOUT
     else emit_row duckdb "ERROR($code)"; fi
   fi
 done
 
-{ printf "\n%-8s %5s %4s %12s %11s %12s %11s %11s %11s %11s %11s %15s %24s\n" \
-    engine dim reps rows probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
-  sort -k2,2n "$BUF"; }
+{ printf "\n%-8s %10s %4s %11s %5s %11s %12s %11s %11s %11s %11s %11s %15s %24s\n" \
+    engine dim reps rows "" probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
+  sort -k1,1 -k2,2n "$BUF"; }
