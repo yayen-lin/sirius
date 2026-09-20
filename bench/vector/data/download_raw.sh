@@ -35,23 +35,23 @@ verify () {  # verify <file> <expected-bytes>
   else echo "  FAIL $f: got $got, expected $want" >&2; return 1; fi
 }
 
-echo "=== [1/5] gist-960-euclidean.hdf5 (~3.6 GiB) ==="
+echo "=== [1/5] gist-960-euclidean.hdf5 ==="
 curl -C - -o gist-960-euclidean.hdf5 "$ANN/gist-960-euclidean.hdf5"
 verify gist-960-euclidean.hdf5 3844648288
 
-echo "=== [2/5] sift-128-euclidean.hdf5 (~500 MiB) ==="
+echo "=== [2/5] sift-128-euclidean.hdf5 ==="
 curl -C - -o sift-128-euclidean.hdf5 "$ANN/sift-128-euclidean.hdf5"
 verify sift-128-euclidean.hdf5 525128288
 
-echo "=== [3/5] bigann shared queries (1.3 MB) ==="
+echo "=== [3/5] bigann shared queries ==="
 curl -C - -o query.public.10K.u8bin "$BIGANN/query.public.10K.u8bin"
 verify query.public.10K.u8bin 1280008
 
-echo "=== [4/5] bigann base.1B.u8bin (128 GB -- this is the long one) ==="
+echo "=== [4/5] bigann base.1B.u8bin ==="
 curl -C - -o base.1B.u8bin "$BIGANN/base.1B.u8bin"
 verify base.1B.u8bin "$BYTES_1B"
 
-echo "=== [5/5] slice 100M and 10M prefixes locally (no re-download) ==="
+echo "=== [5/5] slice 100M and 10M prefixes locally ==="
 head -c "$BYTES_100M" base.1B.u8bin > base.100M.u8bin
 head -c "$BYTES_10M"  base.1B.u8bin > base.10M.u8bin
 verify base.100M.u8bin "$BYTES_100M"
