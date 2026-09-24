@@ -19,47 +19,50 @@
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,fit}
 
+\newcommand{\yxy}[1]{\textcolor{blue}{[yxy] #1}}
+\newcommand{\andy}[1]{\textcolor[HTML]{FF375F}{[andy] #1}}
+
 \AtBeginDocument{%
   \providecommand\BibTeX{{%
     Bib\TeX}}}
 
 \begin{document}
 
-\fancyhead{} % Clear all headers
-\fancyfoot{} % Clear all footers
-\fancyfoot[C]{\thepage} % Keep page numbers centered at bottom
+  \fancyhead{} % Clear all headers
+  \fancyfoot{} % Clear all footers
+  \fancyfoot[C]{\thepage} % Keep page numbers centered at bottom
 
-\title{Vector Join} % or GPU accelerated Vector Join
+  \title{Vector Join} % or GPU accelerated Vector Join
 
 
-\author{Yayen Lin}
-\email{yayen@cs.wisc.edu}
-\authornote{These authors contributed equally to this research.}
-\affiliation{%
-  \institution{University of Wisconsin-Madison}
-  \city{Madison}
-  \country{USA}
-}
+  \author{Yayen Lin}
+  \email{yayen@cs.wisc.edu}
+  \authornote{These authors contributed equally to this research.}
+  \affiliation{%
+    \institution{University of Wisconsin-Madison}
+    \city{Madison}
+    \country{USA}
+  }
 
-\author{Duke Nguyen}
-\email{dnguyen56@wisc.edu}
-\authornotemark[1]
-\affiliation{%
-  \institution{University of Wisconsin-Madison}
-  \city{Madison}
-  \country{USA}
-}
+  \author{Duke Nguyen}
+  \email{dnguyen56@wisc.edu}
+  \authornotemark[1]
+  \affiliation{%
+    \institution{University of Wisconsin-Madison}
+    \city{Madison}
+    \country{USA}
+  }
 
-\author{Xiangyao Yu}
-\email{yxy@cs.wisc.edu}
-\authornotemark[1]
-\affiliation{%
-  \institution{University of Wisconsin-Madison}
-  \city{Madison}
-  \country{USA}
-}
+  \author{Xiangyao Yu}
+  \email{yxy@cs.wisc.edu}
+  \authornotemark[1]
+  \affiliation{%
+    \institution{University of Wisconsin-Madison}
+    \city{Madison}
+    \country{USA}
+  }
 
-\begin{abstract}
+  \begin{abstract}
 
 % in abstract we enter it with a hook
 %
@@ -68,28 +71,27 @@
 %   2. database engine is the perfect fit
 %   3. GPU is the perfect fit
 
-Relational data went through OLTP to OLAP decades ago: answering one row at a time and analyzing all rows at once turned out to be different problems that need different engines.
-In this paper, we argue that vector search solves the OLTP half of the problem, while the OLAP half remains largely unexplored, and that the GPU is the natural way to scale it and a database engine is the perfect fit for it.
-We present Sirius vector join, a prototype first class operator that integrates into and is optimized by query plan.
-It runs on Sirius, a GPU native SQL engine, and leverages cuVS for high-performance batched vector search (a vector join is, at its core, a batched vector search).
-It achieves a 165x speedup over a DuckDB vector join that uses LATERAL on the exact join path, and is 227x faster on the approximate join path using IVF-Flat index type.
-\end{abstract}
+    Relational data went through OLTP to OLAP decades ago: answering one row at a time and analyzing all rows at once turned out to be different problems that need different engines.
+    In this paper, we argue that vector search solves the OLTP half of the problem, while the OLAP half remains largely unexplored, and that the GPU is the natural way to scale it and a database engine is the perfect fit for it.
+    We present Sirius vector join, a prototype first class operator that integrates into and is optimized by query plan.
+    It runs on Sirius, a GPU native SQL engine, and leverages cuVS for high-performance batched vector search (a vector join is, at its core, a batched vector search).
+    It achieves a 165x speedup over a DuckDB vector join that uses LATERAL on the exact join path, and is 227x faster on the approximate join path using IVF-Flat index type.
+  \end{abstract}
 
-\keywords{Vector Join, Vector Search, Similarity, GPU Database}
+  \keywords{Vector Join, Vector Search, Similarity, GPU Database}
 
-\maketitle
+  \maketitle
 
-\input{sections/1-intro}
-\input{sections/2-back}
-\input{sections/3-motiv}
-\input{sections/4-exact}
-\input{sections/5-approx}
-\input{sections/6-eval}
-\input{sections/7-concl}
-
+  \input{sections/1-intro}
+  \input{sections/2-back}
+  \input{sections/3-motiv}
+  \input{sections/4-exact}
+  \input{sections/5-approx}
+  \input{sections/6-eval}
+  \input{sections/7-concl}
 
 %% the bibliography file
-\bibliographystyle{ACM-Reference-Format}
-\bibliography{base}
+  \bibliographystyle{ACM-Reference-Format}
+  \bibliography{base}
 
 \end{document}

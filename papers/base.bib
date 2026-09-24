@@ -212,6 +212,54 @@
 }
 
 % ============================================================
+% Embedding generation inside the engine
+% ============================================================
+@misc{MilvusEmbeddingFunction,
+    author = {{Milvus}}, title = {Embedding Function Overview -- {Milvus} Documentation}, year = 2026,
+    url = {https://milvus.io/docs/embedding-function-overview.md}, note = {Accessed: 2026-09-22}
+}
+@misc{PineconeIntegratedEmbedding,
+    author = {{Pinecone}}, title = {Upsert Records -- {Pinecone} Docs}, year = 2026,
+    url = {https://docs.pinecone.io/guides/index-data/upsert-data}, note = {Accessed: 2026-09-22}
+}
+@misc{WeaviateVectorizers,
+    author = {{Weaviate}}, title = {Modules -- An Introduction -- {Weaviate} Documentation}, year = 2026,
+    url = {https://docs.weaviate.io/weaviate/tutorials/modules}, note = {Accessed: 2026-09-22}
+}
+@misc{QdrantCloudInference,
+    author = {{Qdrant}}, title = {Inference -- {Qdrant} Cloud}, year = 2026,
+    url = {https://qdrant.tech/documentation/cloud/inference/}, note = {Accessed: 2026-09-22}
+}
+@misc{ValdOnnxIngressFilter,
+    author = {{Vald Project}}, title = {vald-onnx-ingress-filter: {ONNX} Ingress Filter for {Vald}}, year = 2026,
+    url = {https://github.com/vdaas/vald-onnx-ingress-filter}, note = {Accessed: 2026-09-22}
+}
+@misc{SnowflakeAIEmbed,
+    author = {{Snowflake}}, title = {{AI\_EMBED} -- {Snowflake} Documentation}, year = 2026,
+    url = {https://docs.snowflake.com/en/sql-reference/functions/ai_embed}, note = {Accessed: 2026-09-22}
+}
+@misc{BigQueryGenerateEmbedding,
+    author = {{Google Cloud}}, title = {The {AI.GENERATE\_EMBEDDING} Function -- {BigQuery}}, year = 2026,
+    url = {https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-ai-generate-embedding}, note = {Accessed: 2026-09-22}
+}
+@misc{HeatWaveMLEmbedRow,
+    author = {{Oracle}}, title = {{ML\_EMBED\_ROW} -- {MySQL HeatWave} User Guide}, year = 2026,
+    url = {https://dev.mysql.com/doc/heatwave/en/mys-hwgenai-ml-embed-row.html}, note = {Accessed: 2026-09-22}
+}
+@misc{SQLServerAIGenerateEmbeddings,
+    author = {{Microsoft}}, title = {{AI\_GENERATE\_EMBEDDINGS} ({Transact-SQL}) -- {SQL Server}}, year = 2026,
+    url = {https://learn.microsoft.com/en-us/sql/t-sql/functions/ai-generate-embeddings-transact-sql?view=sql-server-ver17}, note = {Accessed: 2026-09-22}
+}
+@misc{PgaiRepo,
+    author = {{Timescale}}, title = {pgai: {AI} Workflows and Automatic Embedding Generation in {PostgreSQL}}, year = 2026,
+    url = {https://github.com/timescale/pgai}, note = {Accessed: 2026-09-22}
+}
+@misc{DuckDBQuackformers,
+    author = {{DuckDB Community Extensions}}, title = {quackformers: Embedding Functions for {DuckDB}}, year = 2026,
+    url = {https://duckdb.org/community_extensions/extensions/quackformers}, note = {Accessed: 2026-09-22}
+}
+
+% ============================================================
 % Vector join use cases
 % ============================================================
 
@@ -278,3 +326,278 @@
     url       = {https://openreview.net/forum?id=wCu6T5xFjeJ}
 }
 
+
+% ============================================================
+% Vector search integrated into relational engines
+% ============================================================
+@misc{OracleAIVectorSearch,
+    author = {{Oracle}}, title = {Oracle {AI} Vector Search User's Guide, 23ai}, year = 2026,
+    url = {https://docs.oracle.com/cd/G11854_01/vecse/ai-vector-search-users-guide.pdf}, note = {Accessed: 2026-09-23}
+}
+@misc{SQLServerVectorIndex,
+    author = {{Microsoft}}, title = {{CREATE VECTOR INDEX} ({Transact-SQL}) -- {SQL Server}}, year = 2026,
+    url = {https://learn.microsoft.com/en-us/sql/t-sql/statements/create-vector-index-transact-sql?view=sql-server-ver17}, note = {Accessed: 2026-09-23}
+}
+@misc{AlloyDBScaNN,
+    author = {{Google Cloud}}, title = {Create a {ScaNN} Index -- {AlloyDB} for {PostgreSQL}}, year = 2026,
+    url = {https://docs.cloud.google.com/alloydb/docs/ai/create-scann-index}, note = {Accessed: 2026-09-23}
+}
+
+@inproceedings{ZhangPgLimits24,
+    author    = {Zhang, Yunan and Liu, Shige and Wang, Jianguo},
+    title     = {Are There Fundamental Limitations in Supporting Vector Data Management in Relational Databases? {A} Case Study of {PostgreSQL}},
+    booktitle = {Proceedings of the 40th IEEE International Conference on Data Engineering},
+    series    = {ICDE '24},
+    year      = 2024,
+    doi       = {10.1109/ICDE60146.2024.00280}, % TODO: verify the doi
+    pages     = {3640--3653}
+}
+
+@inproceedings{ZhangVBase23,
+    author    = {Zhang, Qianxi and Xu, Shuotao and Chen, Qi and Sui, Guoxin and Xie, Jiadong and Cai, Zhizhen and Chen, Yaoqi and He, Yinxuan and Yang, Yuqing and Yang, Fan and Yang, Mao and Zhou, Lidong},
+    title     = {{VBASE}: Unifying Online Vector Similarity Search and Relational Queries via Relaxed Monotonicity},
+    booktitle = {17th USENIX Symposium on Operating Systems Design and Implementation},
+    series    = {OSDI '23},
+    year      = 2023,
+    pages     = {377--395},
+    url       = {https://www.usenix.org/conference/osdi23/presentation/zhang-qianxi}
+}
+
+% ============================================================
+% Vector search on GPUs
+% ============================================================
+@article{JohnsonFaissGPU21,
+    author  = {Johnson, Jeff and Douze, Matthijs and J{\'e}gou, Herv{\'e}},
+    title   = {Billion-Scale Similarity Search with {GPUs}},
+    journal = {IEEE Transactions on Big Data},
+    volume  = {7},
+    number  = {3},
+    pages   = {535--547},
+    year    = {2021},
+    doi     = {10.1109/TBDATA.2019.2921572}
+}
+
+@inproceedings{OotomoCAGRA24,
+    author    = {Ootomo, Hiroyuki and Naruse, Akira and Nolet, Corey and Wang, Ray and Feher, Tamas and Wang, Yong},
+    title     = {{CAGRA}: Highly Parallel Graph Construction and Approximate Nearest Neighbor Search for {GPUs}},
+    booktitle = {Proceedings of the 40th IEEE International Conference on Data Engineering},
+    series    = {ICDE '24},
+    year      = 2024,
+    pages     = {4236--4247},
+    doi       = {10.1109/ICDE60146.2024.00323}
+}
+
+@misc{MetaFaissCuVS25,
+    author = {{Meta Engineering}}, title = {Accelerating {GPU} Indexes in {Faiss} with {NVIDIA} {cuVS}}, year = 2025, month = may,
+    url = {https://engineering.fb.com/2025/05/08/data-infrastructure/accelerating-gpu-indexes-in-faiss-with-nvidia-cuvs/}, note = {Accessed: 2026-09-23}
+}
+@misc{MilvusGPUIndex,
+    author = {{Milvus}}, title = {{GPU} Index Overview -- {Milvus} Documentation}, year = 2026,
+    url = {https://milvus.io/docs/gpu-index-overview.md}, note = {Accessed: 2026-09-23}
+}
+@misc{OpenSearchGPU25,
+    author = {Verma, Navneet and Nolet, Corey and Gupta, Kshitiz and Tong, Dylan and Stephens, Nathan and Nakkirtha, Vamshi Vijay},
+    title = {{GPU}-Accelerated Vector Search in {OpenSearch}: A New Frontier}, year = 2025, month = jun,
+    url = {https://opensearch.org/blog/gpu-accelerated-vector-search-opensearch-new-frontier/}, note = {Accessed: 2026-09-23}
+}
+@misc{ElasticGPUIndexing,
+    author = {{Elastic}}, title = {{GPU} Accelerated Vector Indexing -- {Elasticsearch} Reference}, year = 2026,
+    url = {https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/gpu-vector-indexing}, note = {Accessed: 2026-09-23}
+}
+
+% ============================================================
+% Similarity joins: early algorithms and theory
+% ============================================================
+@inproceedings{BrinkhoffSpatialJoin93,
+    author    = {Brinkhoff, Thomas and Kriegel, Hans-Peter and Seeger, Bernhard},
+    title     = {Efficient Processing of Spatial Joins Using {R}-trees},
+    booktitle = {Proceedings of the 1993 ACM SIGMOD International Conference on Management of Data},
+    series    = {SIGMOD '93},
+    year      = 1993,
+    pages     = {237--246},
+    doi       = {10.1145/170035.170075}
+}
+
+@inproceedings{ShimSimJoin97,
+    author    = {Shim, Kyuseok and Srikant, Ramakrishnan and Agrawal, Rakesh},
+    title     = {High-Dimensional Similarity Joins},
+    booktitle = {Proceedings of the 13th International Conference on Data Engineering},
+    series    = {ICDE '97},
+    year      = 1997,
+    pages     = {301--311}
+}
+
+@inproceedings{KoudasSevcik98,
+    author    = {Koudas, Nick and Sevcik, Kenneth C.},
+    title     = {High Dimensional Similarity Joins: Algorithms and Performance Evaluation},
+    booktitle = {Proceedings of the 14th International Conference on Data Engineering},
+    series    = {ICDE '98},
+    year      = 1998,
+    pages     = {466--475}
+}
+
+@inproceedings{HjaltasonSametDistJoin98,
+    author    = {Hjaltason, G{\'\i}sli R. and Samet, Hanan},
+    title     = {Incremental Distance Join Algorithms for Spatial Databases},
+    booktitle = {Proceedings of the 1998 ACM SIGMOD International Conference on Management of Data},
+    series    = {SIGMOD '98},
+    year      = 1998,
+    pages     = {237--248},
+    doi       = {10.1145/276304.276326}
+}
+
+@inproceedings{IndykMotwaniLSH98,
+    author    = {Indyk, Piotr and Motwani, Rajeev},
+    title     = {Approximate Nearest Neighbors: Towards Removing the Curse of Dimensionality},
+    booktitle = {Proceedings of the 30th Annual ACM Symposium on Theory of Computing},
+    series    = {STOC '98},
+    year      = 1998,
+    pages     = {604--613},
+    doi       = {10.1145/276698.276876}
+}
+
+@inproceedings{CorralClosestPair00,
+    author    = {Corral, Antonio and Manolopoulos, Yannis and Theodoridis, Yannis and Vassilakopoulos, Michael},
+    title     = {Closest Pair Queries in Spatial Databases},
+    booktitle = {Proceedings of the 2000 ACM SIGMOD International Conference on Management of Data},
+    series    = {SIGMOD '00},
+    year      = 2000,
+    pages     = {189--200}
+}
+
+@inproceedings{BohmEGO01,
+    author    = {B{\"o}hm, Christian and Braunm{\"u}ller, Bernhard and Krebs, Florian and Kriegel, Hans-Peter},
+    title     = {Epsilon Grid Order: An Algorithm for the Similarity Join on Massive High-Dimensional Data},
+    booktitle = {Proceedings of the 2001 ACM SIGMOD International Conference on Management of Data},
+    series    = {SIGMOD '01},
+    year      = 2001,
+    pages     = {379--388},
+    doi       = {10.1145/375663.375714}
+}
+
+@article{BohmKrebsKNNJoin04,
+    author  = {B{\"o}hm, Christian and Krebs, Florian},
+    title   = {The k-Nearest Neighbour Join: Turbo Charging the {KDD} Process},
+    journal = {Knowledge and Information Systems},
+    volume  = {6},
+    pages   = {728--749},
+    year    = {2004},
+    doi     = {10.1007/s10115-003-0122-9}
+}
+
+@inproceedings{XiaGorder04,
+    author    = {Xia, Chenyi and Lu, Hongjun and Ooi, Beng Chin and Hu, Jin},
+    title     = {{Gorder}: An Efficient Method for {KNN} Join Processing},
+    booktitle = {Proceedings of the 30th International Conference on Very Large Data Bases},
+    series    = {VLDB '04},
+    year      = 2004,
+    pages     = {756--767}
+}
+
+@inproceedings{AhleInnerProductJoin16,
+    author    = {Ahle, Thomas Dybdahl and Pagh, Rasmus and Razenshteyn, Ilya and Silvestri, Francesco},
+    title     = {On the Complexity of Inner Product Similarity Join},
+    booktitle = {Proceedings of the 35th ACM Symposium on Principles of Database Systems},
+    series    = {PODS '16},
+    year      = 2016,
+    pages     = {151--164},
+    doi       = {10.1145/2902251.2902285}
+}
+
+% ============================================================
+% Similarity joins in systems
+% ============================================================
+@inproceedings{ChaudhuriSSJoin06,
+    author    = {Chaudhuri, Surajit and Ganti, Venkatesh and Kaushik, Raghav},
+    title     = {A Primitive Operator for Similarity Joins in Data Cleaning},
+    booktitle = {Proceedings of the 22nd International Conference on Data Engineering},
+    series    = {ICDE '06},
+    year      = 2006,
+    pages     = {5},
+    doi       = {10.1109/ICDE.2006.9}
+}
+
+@inproceedings{LiebermanGPUSimJoin08,
+    author    = {Lieberman, Michael D. and Sankaranarayanan, Jagan and Samet, Hanan},
+    title     = {A Fast Similarity Join Algorithm Using Graphics Processing Units},
+    booktitle = {Proceedings of the 24th IEEE International Conference on Data Engineering},
+    series    = {ICDE '08},
+    year      = 2008,
+    pages     = {1111--1120}
+}
+
+@inproceedings{SilvaSimJoinOp10,
+    author    = {Silva, Yasin N. and Aref, Walid G. and Ali, Mohamed H.},
+    title     = {The Similarity Join Database Operator},
+    booktitle = {Proceedings of the 26th IEEE International Conference on Data Engineering},
+    series    = {ICDE '10},
+    year      = 2010,
+    pages     = {892--903}
+}
+
+@article{LuKNNMapReduce12,
+    author  = {Lu, Wei and Shen, Yanyan and Chen, Su and Ooi, Beng Chin},
+    title   = {Efficient Processing of k Nearest Neighbor Joins using {MapReduce}},
+    journal = {Proceedings of the VLDB Endowment},
+    volume  = {5},
+    number  = {10},
+    pages   = {1016--1027},
+    year    = {2012},
+    doi     = {10.14778/2336664.2336674}
+}
+
+@inproceedings{XieSimba16,
+    author    = {Xie, Dong and Li, Feifei and Yao, Bin and Li, Gefei and Zhou, Liang and Guo, Minyi},
+    title     = {{Simba}: Efficient In-Memory Spatial Analytics},
+    booktitle = {Proceedings of the 2016 International Conference on Management of Data},
+    series    = {SIGMOD '16},
+    year      = 2016,
+    pages     = {1071--1085},
+    doi       = {10.1145/2882903.2915237}
+}
+
+@inproceedings{GowanlockGPUSelfJoin19,
+    author    = {Gowanlock, Michael and Karsin, Ben},
+    title     = {{GPU}-Accelerated Similarity Self-Join for Multi-Dimensional Data},
+    booktitle = {Proceedings of the 15th International Workshop on Data Management on New Hardware},
+    series    = {DaMoN '19},
+    year      = 2019,
+    doi       = {10.1145/3329785.3329920}
+}
+
+% ============================================================
+% Similarity joins over modern vector embeddings
+% ============================================================
+@misc{WangXling24,
+    author        = {Wang, Yifan and Pathak, Vyom and Wang, Daisy Zhe},
+    title         = {{Xling}: A Learned Filter Framework for Accelerating High-Dimensional Approximate Similarity Join},
+    year          = 2024,
+    eprint        = {2402.13397},
+    archivePrefix = {arXiv},
+    url           = {https://arxiv.org/abs/2402.13397}
+}
+
+@article{XieSimJoin25,
+    author  = {Xie, Jiadong and Yu, Jeffrey Xu and Liu, Yingfan},
+    title   = {Fast Approximate Similarity Join in Vector Databases},
+    journal = {Proceedings of the ACM on Management of Data},
+    year    = {2025},
+    doi     = {10.1145/3725403}
+}
+
+@article{ChenDiskJoin26,
+    author  = {Chen, Yanqi and Yan, Xiao and Meliou, Alexandra and Lo, Eric},
+    title   = {{DiskJoin}: Large-scale Vector Similarity Join with {SSD}},
+    journal = {Proceedings of the ACM on Management of Data},
+    year    = {2025},
+    doi     = {10.1145/3769780}
+}
+
+@misc{KimVectorJoin26,
+    author        = {Kim, Kyoungmin and Roth, Lennart and Liang, Liang and Ailamaki, Anastasia},
+    title         = {Fast Approximate Vector Joins via Offline-Online Co-Design},
+    year          = 2026,
+    eprint        = {2603.16360},
+    archivePrefix = {arXiv},
+    url           = {https://arxiv.org/abs/2603.16360}
+}
