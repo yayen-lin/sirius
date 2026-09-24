@@ -1,4 +1,4 @@
-\section{Technical \#1: Exact}\label{sec:technical-1:-exact}
+\section{Exact Vector Join}\label{sec:technical-1:-exact}
 
 \input{approx-exact}
 
@@ -24,7 +24,7 @@ It is the most straightforward to build, and it is the foundation the approximat
 For now the join is reached through a table function and requires both tables pinned in GPU memory.
 This is an implementation convenience we return to in Section~\ref{subsec:exact-native}: once a vector join gains a matchable SQL surface, the engine feeds and tiers its batches the same way it does for every other operator.
 
-The join returns one of the three reduction outcomes from Section~\ref{subsec:the-vector-join}, the $k$ nearest per probe row, the $k$ nearest pairs overall, or every pair within a threshold $\varepsilon$, and we express all three as Sirius operators.
+The join returns one of the three reduction outcomes from Section~\ref{subsec:vector-join}, the $k$ nearest per probe row, the $k$ nearest pairs overall, or every pair within a threshold $\varepsilon$, and we express all three as Sirius operators.
 When the corpus fits in GPU memory, the exact join is a brute-force walk over batches (Figure~\ref{fig:exact}).
 Sirius reads both tables as batches, so the probe side arrives as a batch of query rows rather than a single query vector, and a brute-force search over one such batch is already a top-$k$ join between it and one corpus batch.
 The join visits every pair of a probe batch and a corpus batch, runs top-$k$ on the pair, and merges each probe row's results across all corpus batches into its final top-$k$.

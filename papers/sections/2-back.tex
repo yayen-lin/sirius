@@ -4,21 +4,105 @@
 
 \subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
 
+% what embeddings/vectors are
 A vector embedding is a fixed-length array of numbers that a machine learning model produces from a piece of data (structured or unstructured) such as a passage of text, an image, an audio, a video, or a pattern.
 The model is trained so that geometric proximity in this vector space corresponds to semantic similarity: semantically similar inputs map to nearby vectors, and unrelated inputs map farther apart.
 Proximity is measured with a distance or similarity function over the vectors, most commonly Euclidean (L2) distance, cosine similarity, or inner product.
 Modern embedding models produce vectors with hundreds to thousands of dimensions, and both the number of embeddings and their dimensionality grow with the size of the dataset and the capacity of the model.
 Because the embedding turns an unstructured object into a point in a metric space, semantic comparison becomes a distance computation over their vectors.
 
-\subsection{Vector Search}\label{subsec:vector-search}
+\yxy{also explain how they are integrated into databases today: explicitly stored as columns, or implicitly generated as needed.}
 
-Vector search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.
+% how they are integrated into databases today
+Databases integrate embeddings in one of two ways: they are stored explicitly as a column, or generated implicitly by the engine when needed.
+For storage, systems either provide a dedicated \texttt{VECTOR} type with a declared dimension, as in pgvector, Snowflake, SQL Server, and MySQL HeatWave, or reuse a generic array type, as in DuckDB, ClickHouse, and BigQuery~\cite{PgvectorRepo, SnowflakeVector, SQLServer2025Vector, MySQLHeatWaveVector, DuckDBVSS, ClickHouseVSS, BigQueryVectorSearch}.
+For embedding generation, most dedicated vector databases embed raw data themselves at both insert and query time: Milvus, Pinecone, and Weaviate natively, and Qdrant and Vald through a managed inference service and a pluggable ingress filter~\cite{MilvusEmbeddingFunction, PineconeIntegratedEmbedding, WeaviateVectorizers, QdrantCloudInference, ValdOnnxIngressFilter}.
+Relational systems split.
+Some expose generation as a SQL function, such as Snowflake's \texttt{AI\_EMBED}, BigQuery's \texttt{AI.GENERATE\_EMBEDDING}, HeatWave's \texttt{ML\_EMBED\_ROW}, and SQL Server's \texttt{AI\_GENERATE\_EMBEDDINGS}, so embeddings can be computed on the fly inside any query without being stored~\cite{SnowflakeAIEmbed, BigQueryGenerateEmbedding, HeatWaveMLEmbedRow, SQLServerAIGenerateEmbeddings}.
+In contrast, the cores of pgvector, DuckDB, and ClickHouse only store precomputed vectors and leave generation to add-on extensions or user-defined functions~\cite{PgaiRepo, DuckDBQuackformers, ClickHouseVSS}.
+Either way, by the time a query joins on them, the embeddings are materialized as fixed-dimension columns, whether read from storage or computed as an intermediate result.
+
+
+\subsection{Semantic/Similarity Search}\label{subsec:vector-search}
+
+% what is a vector/semantic/similarity search & exact and approximate
+Vector search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.\yxy{maybe give a quick example of a vector search query}
+In SQL it is an ordering by distance followed by a limit, as in the DuckDB query below, which returns the five documents closest to a query embedding \texttt{\$q}:
+
+\begin{lstlisting}[language=SQL, basicstyle=\ttfamily\small, frame=none]
+SELECT id, title
+FROM docs -- docs(id, title, emb FLOAT[768])
+ORDER BY array_cosine_distance(emb, $q)
+LIMIT 5;
+\end{lstlisting}
+
 A brute-force scan compares the query vector against every vector in the dataset, which is exact but expensive at scale.
-To go faster, systems build an approximate nearest neighbor (ANN) index such as IVF or HNSW, which restricts the search to a small subset of candidates and trades some recall for large speedups.
-Vector search is now a mature and crowded market, served by a number of dedicated engines~\cite{WangMilvus21, PineconeDocs, WeaviateDocs, QdrantDocs, ValdDocs} or integrated into traditional databases~\cite{PgvectorRepo, DuckDBVSS, ClickHouseVSS, SnowflakeVector, BigQueryVectorSearch, SQLServer2025Vector, MySQLHeatWaveVector} on use cases like RAG, recommendation, and image/video/audio search.
+To go faster, systems build an approximate nearest neighbor (ANN) index such as IVF or HNSW~\cite{JohnsonFaissGPU21, MalkovYashunin20}, which restricts the search to a small subset of candidates and trades some recall for large speedups.
+Vector search is now a mature and crowded market, served by a number of dedicated engines or integrated into traditional databases on use cases like RAG, recommendation, and image/video/audio search~\cite{PanWangLi24}. \yxy{expand the dedicated vs. integrated part a bit more. At least on how vector search is integrated into traditional DB.}
 
-\subsection{The Vector Join}\label{subsec:the-vector-join}
+% dedicated vs integrated, and our conclusion at the end
+Dedicated vector databases support a wider variety of vector related operations while it also has more limitations than relational databases, and vice versa.
+The ANN index on a dedicated database is the main way to access data, and storage is organized around it.
+They offer more index types and handle filters and dense/sparse hybrid search within the index.
+However, they have their own query languages/APIs rather than SQL and they’re not easy to learn, have no joins, have weaker transactions, and data need to be migrated back and forth which might lead to more issues such as data consistency~\cite{WangMilvus21, VDBMarketReport26}.
+This is why we're seeing more and more relational databases are pushing for vector operation support lately as they make management, backup, and deployment easier~\cite{StonebrakerPavloAround24}.
+Integrated relational systems allow processing vector data with relational SQL, have distance functions or operators, have ANN index as a new index type.
+For example, pgvector's HNSW, IVFFlat~\cite{PgvectorRepo}, DuckDB VSS's HNSW~\cite{DuckDBVSS}, ClickHouse's vector skip index~\cite{ClickHouseVSS}, Oracle 23ai's HNSW, IVF~\cite{OracleAIVectorSearch}, SQL Server 2025's DiskANN~\cite{SQLServerVectorIndex}, AlloyDB's ScaNN~\cite{AlloyDBScaNN}; Snowflake has no index and always brute-forces~\cite{SnowflakeVector}.
+However, what falls short for integrated engines is mostly an immature and less standardized problem.
+Integrated engines don't treat vector search as a real operator; they add it as a special optimizer rewrite for a single query shape.
+The index only works for one pattern: vector search enters the engine as an optimizer rewrite for one query shape, \texttt{ORDER BY} distance to a single query vector followed by \texttt{LIMIT}~$k$~\cite{PgvectorRepo, DuckDBVSS}.
+Any other shape loses the index or degrades to a loop of point searches.
+Moreover, nothing is standardized, every engine has its own operators, functions, table functions; in other words, every engine spells vector search differently.
+We came to a conclusion that users would prefer a good enough vector operation in the existing databases over a dedicated well-designed vector database in a separate system.
+For pure vector search workload, specialized vector databases might be faster but for mixed workloads, integrated solutions win on operational simplicity and cost eﬃciency.
+Exact vector search on GPU is also able to compete against approximate vector search over CPU based database engines.
 
-While a search answers a point query, a vector \emph{join} answers a set query: given a table $R$ of probe vectors and a table $S$ of corpus vectors, return, for the whole of $R$, the neighbors in $S$ that satisfy a similarity condition.
-The condition takes one of three forms: the $k$ nearest per row of $R$ (per-row top-$k$), the $k$ nearest pairs overall (global top-$k$), or every pair within a distance threshold (a radius join).
+\yxy{Add a discussion on how vector search is supported in GPU today}
+
+% discussion on how vector search is supported in GPU today
+Vector search in GPU has been widely supported and adopted, but not in a way we were expecting.
+There are two main libraries that support vector search on GPU today: FAISS~\cite{JohnsonFaissGPU21} and cuVS~\cite{NvidiaCuVS26}.
+FAISS supports brute force, IVF-Flat, IVF-PQ, plus fast GPU top-k selection.
+It integrates cuVS as an optional GPU-acceleration backend since 2025, enabling faster index building and search for supported index types~\cite{MetaFaissCuVS25}.
+cuVS supports brute force, IVF-Flat, IVF-PQ, and CAGRA, a graph based index for the GPU~\cite{OotomoCAGRA24}.
+In production systems, cuVS is mostly used: Milvus supports GPU index types~\cite{MilvusGPUIndex}.
+What's worse is that many systems use the GPU only to speed up index building, and move the index back to CPU to serve queries.
+For example OpenSearch 3.0 and Elasticsearch use the GPU only to build the index then convert the CAGRA graph to HNSW and serve queries on CPU~\cite{OpenSearchGPU25, ElasticGPUIndexing}.
+We haven't seen a real use case where GPU is used thoroughly.
+The GPU is used where the work is batched, either index building or high-throughput batches, as for a single query the speedup gain is small, and serving is often moved back to CPU.
+We see the gap and challenge how things are done today.
+Sirius as a database library/extension allow the CPU based databases to step foot into the realm of GPUs, it provides not only end to end GPU execution as a drop-in accelerator, but vector operations to its finest.
+Moreover, building a CAGRA graph itself is a knn self-join over the whole dataset~\cite{OotomoCAGRA24}.
+This leads us to our next discussion, what is a vector join.
+
+\subsection{Semantic/Similarity Join}\label{subsec:vector-join}
+
+\yxy{title shouldn't be vector join, since it's our proposal. Maybe semantic similarity join or something alike.}
+
+% what is a vector/semantic/similarity join & three join conditions
+While a search answers a point query, a semantic \emph{join} answers a set query: given a table $R$ of probe vectors and a table $S$ of corpus vectors, return, for the whole of $R$, the neighbors in $S$ that satisfy a similarity condition.
+The condition takes one of three forms, each studied under its own name for decades: the $k$ nearest per row of $R$ (per-row top-$k$, the \emph{kNN join}~\cite{BohmKrebsKNNJoin04}), the $k$ nearest pairs overall (global top-$k$, the \emph{$k$ closest pairs} or \emph{distance join}~\cite{HjaltasonSametDistJoin98, CorralClosestPair00}), or every pair within a distance threshold $\varepsilon$ (the \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98}).
+
+\yxy{this section should be much longer. We can provide a simple historical view on how semantic similarity join evolved over the years. It can be something like: (1) early days theoretical work (2) later built into some systems (3) thriving with modern vector data type.}
+
+% historical view
+Semantic join has been around and studied for decades in different forms.
+It started with spatial join in 1990s–2000s where joining two sets of objects by location was among the first non-equi joins to be studied~\cite{BrinkhoffSpatialJoin93}, and moved into high dimensions in the late 1990s, when data mining and multimedia retrieval began describing objects as feature vectors.
+Early algorithms avoided comparing every pair by partitioning or ordering the space using a multidimensional index~\cite{ShimSimJoin97}, a grid order~\cite{BohmEGO01}, or a cluster-based block order~\cite{XiaGorder04}, so that only pairs in nearby regions were compared.
+This pruning is less effective as dimensionality grows: in high dimensions most pairs are roughly equally far apart, so few regions can be skipped, and at the hundreds of dimensions of today's embeddings these methods approach a full pairwise scan.
+Theory draws the same line: locality-sensitive hashing~\cite{IndykMotwaniLSH98} made the approximate problem tractable, while the exact problem is believed to have no subquadratic algorithm~\cite{AhleInnerProductJoin16}.
+
+The following decade (2000s–2010s) moved similarity joins into systems.
+Chaudhuri et al.\ proposed a similarity join as a primitive operator for data cleaning in a relational engine~\cite{ChaudhuriSSJoin06}, and Silva et al.\ built similarity joins into PostgreSQL as first-class operators, running many times faster than the same query written with regular operators~\cite{SilvaSimJoinOp10}.
+As data outgrew a single machine, kNN joins were distributed over MapReduce~\cite{LuKNNMapReduce12} and Spark SQL~\cite{XieSimba16}, and the $\varepsilon$-join was ported to the GPU~\cite{LiebermanGPUSimJoin08, GowanlockGPUSelfJoin19}.
+These systems targeted spatial points, strings and sets, or feature vectors of modest dimension and not learned embeddings, and outside spatial extensions none of them became a standard operator in a commercial engine.
+
+Learned embeddings revived the problems in the next decade (2020s–now).
+The workloads in Section~\ref{subsec:the-work} (deduplication, entity resolution, batch retrieval) are similarity joins over vectors with hundreds of dimensions, and recent work attacks them with the ANN indexes built for search.
+XJoin skips probes predicted to have too few neighbors~\cite{WangXling24}, SimJoin shares graph-index traversal across similar probes~\cite{XieSimJoin25}, DiskJoin scales the join to billions of vectors on SSD~\cite{ChenDiskJoin26}, and Kim et al.\ split the work between offline index building and online probing~\cite{KimVectorJoin26}.
+All four are approximate, run on the CPU, and are standalone algorithms rather than operators inside a query engine.
+Engines, just recently, have begun exposing the join in SQL.
+DuckDB ships \texttt{vss\_join} and \texttt{vss\_match} macros that compute the join by brute force without its HNSW index~\cite{DuckDBVSS}, BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~\cite{BigQueryVectorSearch}, and \texttt{NEAREST BY} is appearing in Databricks, Spark, and DuckDB (Section~\ref{subsec:the-work}).
+The syntax exists and so do fast algorithms; what is missing is an engine that runs the similarity join as an operator, exactly and at scale.
+
 

@@ -7,7 +7,7 @@
 % Talk about the gap, talk about why CPU has its limit
 % A Logical Operator?
 % An end to end system?
-
+\yxy{we don't need this subsection}
 TBD
 
 \subsection{The Transition: Why Now}\label{subsec:the-transition}
@@ -30,11 +30,12 @@ Few systems or vendors offer vector join operations today, and we believe there 
 
 \subsection{The Workloads and Related Work}\label{subsec:the-work}
 
+\yxy{I think S3.3 can be merged into S3.2. Just one subsection making a strong case for vector join as a new fundamental operator. }
 Vector join is the workload that already appears throughout analytical pipelines under different names.
 In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points; pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{AbbasSemDeDup23}.
 In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings rather than by exact keys, which turns a classically hard matching problem into an embedding similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
 In retrieval and recommendation, an entire batch of user or query embeddings is scored against a catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
-In every case the work is inherently batched.
+In every case the work is inherently batched \yxy{maybe batched vector search itself is also a good example.}
 
 The demand is now surfacing in native SQL language itself.
 Apache Spark has a standing proposal for a \texttt{NEAREST BY} top-$k$ ranking join~\cite{ApacheSparkJIRA56395}, Databricks SQL already ships a \texttt{NEAREST BY} clause~\cite{DatabricksNearestBy26}, and recently DuckDB~\cite{DuckDBNearestByPR24137}.
@@ -42,10 +43,12 @@ The declarative surface for vector joins is beginning to standardize, which shar
 
 \subsection{A Vector Join Is a Relational Join}\label{subsec:why-database}
 
-Stonebraker and Pavlo argue that vector search is a feature, not an architecture, and that relational engines will simply absorb it~\cite{StonebrakerPavloAround24}.
+Stonebraker and Pavlo argue that vector search is a feature, not an architecture, and that relational engines will simply absorb it~\cite{StonebrakerPavloAround24}\yxy{good reference. but probably better fit in S2.2.}.
 The vector join is where that absorption pays off, because it is a relational join, for the following reason.
 Its join predicate is a non-equi condition that ranks candidate pairs by distance (unlike a hash join, which is a equi-join by matching index), and it is followed by a reduction that selects which ranked pairs survive.
 These are the vector analogues of the reductions that OLAP engines already optimize, and the \texttt{NEAREST BY} proposals encode exactly this structure~\cite{ApacheSparkJIRA56395, DatabricksNearestBy26}.
+
+\yxy{The point of this section is to argue a vector join is just another join. But according to S3.3, vector join is already integrated into real systems; so it is a bit awkward to argue for something that is already real. I suggest just expand S3.3 a little bit with the contents where, to argue briefly vector join should be a join operator, and use databricks/DuckDB as evidence.}
 
 Treating it as a join brings the standard toolbox to work with.
 Reductions can be pushed into the join so that only surviving pairs are ever materialized, in the same spirit as pushing a limit or an aggregate below a join.
@@ -55,11 +58,14 @@ This is the IVF-style approximate search recast as a partitioned join, and it is
 Whether to use that option is a planning decision.
 The planner reads the cardinality of the intermediate result reaching the join and picks accordingly: an exact brute-force join at high selectivity, an approximate join at low selectivity.
 
-\subsection{Why the GPU}\label{subsec:why-gpu}
+\subsection{Why GPU}\label{subsec:why-gpu}
 
 % This section we can show more of our understanding about the type of workloads and use cases we've identified and show that GPU is the perfect fit for this kind of even-more-compute-intensive workload.
 
-Relational OLAP is the heavier sibling of OLTP, and the intuition carries an expectation that the analytical vector workload should be heavier too, but that is what makes it a better fit for the GPU\@.
+\yxy{this subsection looks AI generated, which is ok for now. I think we don't need very long paragraphs here. Make the points more concise and clear. We can add some simple experiments to make the points very clear. Maybe two figures showing: (1) vector search in CPU vs. GPU (small gain) and (2) vector join in CPU vs. GPU (huge gain).
+}
+
+Relational OLAP is the heavier sibling of OLTP, and the intuition carries an expectation that the analytical vector workload should be heavier too\yxy{a better way to argue heavier is it's many-to-many instead of one-to-many}, but that is what makes it a better fit for the GPU\@.
 The core of a vector join is the computation of pairwise distances between a batch of query vectors and a batch of corpus vectors, which for the common metrics reduces to a dense matrix product.
 A single-query search leaves the GPU memory-bound and dominated by launch overhead; batching the query side turns it into a compute-bound GEMM that saturates the tensor cores.
 In other words, we achieve higher arithmetic intensity from having batched inputs; it does more work but runs far more efficiently per unit of work.
@@ -78,5 +84,7 @@ The distance computation is embarrassingly parallel, since every candidate pair 
 The vector join therefore lands on the engine's existing strengths naturally.
 
 \subsection{A Motivating Query}\label{subsec:motivating-query}
+
+\yxy{This is nice to have if we use it as a running example to explain the rest of the paper. Otherwise we don't need it and the new S3.1 will cover the gist of it.}
 
 TBD.
