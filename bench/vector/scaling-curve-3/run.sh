@@ -6,8 +6,8 @@ set -euo pipefail
 
 REPS=10
 EPS=0.5
-TIMEOUT=20m
-SIRIUS_TIMEOUT=20m
+TIMEOUT=30m
+SIRIUS_TIMEOUT=30m
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
 SRC="$REPO/bench/vector/data/gist1m_dims.duckdb"
