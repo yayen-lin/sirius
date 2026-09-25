@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
-# Usage: ./bench/vector/scaling-curve-1/run.sh
-# Title: scaling curve 1, fixed probe, growing corpus, duckdb vs sirius
+# Usage: ./bench/vector/scaling-curve-4/run.sh
+# Title: scaling curve 4, growing probe, fixed 10M corpus, duckdb vs sirius
 
 set -euo pipefail
 
-REPS=10
 EPS=250
-TIMEOUT=30m
+TIMEOUT=1h
 SIRIUS_TIMEOUT=2h
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
+SRC="$REPO/bench/vector/data/bigann10m_sliced.duckdb"
+CORPUS=base_10m
 
-DATASETS=(
-  "bigann1m:$REPO/bench/vector/data/sift1m.duckdb"
-  "bigann10m:$REPO/bench/vector/data/bigann10m.duckdb"
-  "bigann100m:$REPO/bench/vector/data/bigann100m.duckdb"
-#  "bigann1b:$REPO/bench/vector/data/bigann1b.duckdb"
+# label:probe_rows:reps, fewer reps once a single query takes minutes
+SIZES=(
+  "1:1:10"
+  "10:10:10"
+  "100:100:10"
+  "1k:1000:10"
+  "10k:10000:5"
+  "100k:100000:3"
+  "1m:1000000:1"
+  "10m:10000000:1"
 )
 
-echo "probe=queries eps=$EPS reps=$REPS datasets=[$(for d in "${DATASETS[@]}"; do printf '%s ' "${d%%:*}"; done)]"
+echo "probesweep src=$(basename "$SRC") corpus=$CORPUS eps=$EPS sizes=[$(for s in "${SIZES[@]}"; do printf '%s ' "${s%%:*}"; done)]"
 
-query() { echo "SELECT count(*) FROM queries l JOIN base r ON array_distance(l.vec, r.vec) <= $EPS;"; }
-warmup() { echo "SELECT count(*) FROM (SELECT vec FROM queries LIMIT 1) l JOIN base r ON array_distance(l.vec, r.vec) <= $EPS;"; }
+query()  { echo "SELECT count(*) FROM base_$1 l JOIN $CORPUS r ON array_distance(l.vec, r.vec) <= $EPS;"; }
+warmup() { echo "SELECT count(*) FROM (SELECT vec FROM base_$1 LIMIT 1) l JOIN $CORPUS r ON array_distance(l.vec, r.vec) <= $EPS;"; }
 rows() {
-  awk -v dim="$DIM" -v probe="$OUTER" -v corpus="$INNER" -v pairs="$PAIRS" -v dist_ops="$DIST_OPS" '
+  awk -v dim="$DIM" -v probe="$N" -v corpus="$INNER" -v pairs="$PAIRS" -v dist_ops="$DIST_OPS" '
     /^@@/  { block = substr($0, 3); want=1; next }
     /real/ { for (i=1;i<=NF;i++) if ($i=="real") t=$(i+1)
              n[block]++; sum[block]+=t
@@ -53,22 +59,21 @@ trap 'rm -f "$BUF"' EXIT
 emit_row() {
   echo "$1 $LABEL: $2" >&2
   printf "%-8s %10s %4d %11s %5s %11s %12s %11g %11g %11s %11s %11s %15s %24s\n" \
-    "$1" "$LABEL" "$REPS" "$2" "$DIM" "$OUTER" "$INNER" "$PAIRS" "$DIST_OPS" \
+    "$1" "$LABEL" "$REPS" "$2" "$DIM" "$N" "$INNER" "$PAIRS" "$DIST_OPS" \
     "$2" "$2" "$2" "-" "-" >> "$BUF"
 }
 
 DUCKDB_DEAD=0
 SIRIUS_DEAD=0
 
-for entry in "${DATASETS[@]}"; do
-  LABEL="${entry%%:*}"
-  DB="${entry#*:}"
-  echo "running $LABEL ($DB)" >&2
+DIM=$("$CLI" -csv -noheader "$SRC" -c "SELECT len(vec) FROM $CORPUS LIMIT 1;")
+INNER=$("$CLI" -csv -noheader "$SRC" -c "SELECT count(*) FROM $CORPUS;")
 
-  DIM=$("$CLI" -csv -noheader "$DB" -c "SELECT len(vec) FROM base LIMIT 1;")
-  INNER=$("$CLI" -csv -noheader "$DB" -c "SELECT count(*) FROM base;")
-  OUTER=$("$CLI" -csv -noheader "$DB" -c "SELECT count(*) FROM queries;")
-  PAIRS=$((OUTER * INNER))
+for entry in "${SIZES[@]}"; do
+  IFS=: read -r LABEL N REPS <<< "$entry"
+  echo "running $LABEL (N=$N, reps=$REPS)" >&2
+
+  PAIRS=$((N * INNER))
   DIST_OPS=$((PAIRS * DIM))
 
   # --- Sirius ---
@@ -77,14 +82,14 @@ for entry in "${DATASETS[@]}"; do
     emit_row sirius TIMEOUT
   elif {
     echo "SET gpu_execution = true;"
-    warmup
+    warmup "$LABEL"
     echo ".timer on"
     for i in $(seq $REPS); do
       echo ".print @@sirius $LABEL"
-      query
+      query "$LABEL"
     done
     echo ".timer off"
-  } | timeout "$SIRIUS_TIMEOUT" "$CLI" "$DB" | rows >> "$BUF"
+  } | timeout "$SIRIUS_TIMEOUT" "$CLI" "$SRC" | rows >> "$BUF"
   then :
   else
     code=$?
@@ -100,14 +105,14 @@ for entry in "${DATASETS[@]}"; do
     emit_row duckdb TIMEOUT
   elif {
     echo "SET gpu_execution = false;"
-    warmup
+    warmup "$LABEL"
     echo ".timer on"
     for i in $(seq $REPS); do
       echo ".print @@duckdb $LABEL"
-      query
+      query "$LABEL"
     done
     echo ".timer off"
-  } | timeout "$TIMEOUT" "$CLI" "$DB" | rows >> "$BUF"
+  } | timeout "$TIMEOUT" "$CLI" "$SRC" | rows >> "$BUF"
   then :
   else
     code=$?
@@ -119,5 +124,5 @@ for entry in "${DATASETS[@]}"; do
 done
 
 { printf "\n%-8s %10s %4s %11s %5s %11s %12s %11s %11s %11s %11s %11s %15s %24s\n" \
-    engine corpus reps rows dim probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
-  sort -k1,1 -k7,7n "$BUF"; }
+    engine probe reps rows dim probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
+  sort -k1,1 -k6,6n "$BUF"; }

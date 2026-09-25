@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPS=1
+REPS=10
 EPS_LIST=(1.0 0.85)
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"

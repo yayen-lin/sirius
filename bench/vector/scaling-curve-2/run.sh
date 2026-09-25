@@ -4,13 +4,13 @@
 
 set -euo pipefail
 
-REPS=10
+REPS=1
 EPS=250
 TIMEOUT=1h
-SIRIUS_TIMEOUT=6h
+SIRIUS_TIMEOUT=2h
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
-SRC="$REPO/bench/vector/data/bigann10m.duckdb"
+SRC="$REPO/bench/vector/data/bigann10m_sliced.duckdb"
 
 SIZES=(
   "1k:1000"
@@ -22,8 +22,8 @@ SIZES=(
 
 echo "selfjoin(sliced) src=$(basename "$SRC") eps=$EPS reps=$REPS sizes=[$(for s in "${SIZES[@]}"; do printf '%s ' "${s%%:*}"; done)]"
 
-query()  { echo "SELECT count(*) FROM (SELECT vec FROM base ORDER BY id LIMIT $1) l JOIN (SELECT vec FROM base ORDER BY id LIMIT $1) r ON array_distance(l.vec, r.vec) <= $EPS;"; }
-warmup() { echo "SELECT count(*) FROM (SELECT vec FROM base ORDER BY id LIMIT 1) l JOIN (SELECT vec FROM base ORDER BY id LIMIT $1) r ON array_distance(l.vec, r.vec) <= $EPS;"; }
+query()  { echo "SELECT count(*) FROM base_$1 l JOIN base_$1 r ON array_distance(l.vec, r.vec) <= $EPS;"; }
+warmup() { echo "SELECT count(*) FROM (SELECT vec FROM base_$1 LIMIT 1) l JOIN base_$1 r ON array_distance(l.vec, r.vec) <= $EPS;"; }
 rows() {
   awk -v dim="$DIM" -v probe="$N" -v corpus="$N" -v pairs="$PAIRS" -v dist_ops="$DIST_OPS" '
     /^@@/  { block = substr($0, 3); want=1; next }
@@ -62,13 +62,12 @@ emit_row() {
 DUCKDB_DEAD=0
 SIRIUS_DEAD=0
 
-DIM=$("$CLI" -csv -noheader "$SRC" -c "SELECT len(vec) FROM base LIMIT 1;")
-
 for entry in "${SIZES[@]}"; do
   LABEL="${entry%%:*}"
   N="${entry#*:}"
   echo "running $LABEL (N=$N)" >&2
 
+  DIM=$("$CLI" -csv -noheader "$SRC" -c "SELECT len(vec) FROM base_$LABEL LIMIT 1;")
   PAIRS=$((N * N))
   DIST_OPS=$((PAIRS * DIM))
 
@@ -78,11 +77,11 @@ for entry in "${SIZES[@]}"; do
     emit_row sirius TIMEOUT
   elif {
     echo "SET gpu_execution = true;"
-    warmup "$N"
+    warmup "$LABEL"
     echo ".timer on"
     for i in $(seq $REPS); do
       echo ".print @@sirius $LABEL"
-      query "$N"
+      query "$LABEL"
     done
     echo ".timer off"
   } | timeout "$SIRIUS_TIMEOUT" "$CLI" "$SRC" | rows >> "$BUF"
@@ -101,11 +100,11 @@ for entry in "${SIZES[@]}"; do
     emit_row duckdb TIMEOUT
   elif {
     echo "SET gpu_execution = false;"
-    warmup "$N"
+    warmup "$LABEL"
     echo ".timer on"
     for i in $(seq $REPS); do
       echo ".print @@duckdb $LABEL"
-      query "$N"
+      query "$LABEL"
     done
     echo ".timer off"
   } | timeout "$TIMEOUT" "$CLI" "$SRC" | rows >> "$BUF"
