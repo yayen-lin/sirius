@@ -67,6 +67,32 @@ void choose_tile_size(std::size_t m,
   tile_cols = std::max<std::size_t>(tile_cols, 1);
 }
 
+// Turns one raw GEMM value into a true distance
+struct true_distance_op {
+  float const* raw;  // temp_dist tile: raw inner products (expanded) or true distance (unexpanded)
+  float const* qn;   // query norms (expanded only)
+  float const* dn;   // dataset norms (expanded only)
+  std::size_t i;     // global row offset of this tile
+  std::size_t j;     // global col offset of this tile
+  std::size_t cs;    // tile column count
+  bool expanded;
+  bool sqrt_l2;
+  bool cosine;
+  __device__ float operator()(int64_t f) const
+  {
+    if (!expanded) { return raw[f]; }
+    int64_t const row = static_cast<int64_t>(i) + (f / static_cast<int64_t>(cs));
+    int64_t const col = static_cast<int64_t>(j) + (f % static_cast<int64_t>(cs));
+    if (cosine) { return 1.0f - raw[f] / (qn[row] * dn[col]); }
+    // qn/dn are squared norms, to make them raw we do an inner product (|q|^2 + |d|^2 - 2<q,d>)
+    float outv = qn[row] + dn[col] - 2.0f * raw[f];
+    // handles the self-match rounding problem, i.e., float rounding sometimes leaves a tiny
+    // non-zero, so this forces it to exact 0.0
+    if (outv * outv < 1e-6f && qn[row] == dn[col]) { outv = 0.0f; }
+    return sqrt_l2 ? sqrtf(outv > 0.0f ? outv : 0.0f) : outv;
+  }
+};
+
 // Wrap a filled device_uvector as an owning cudf column with no copy.
 template <typename T>
 std::unique_ptr<cudf::column> uvector_to_column(rmm::device_uvector<T>&& v, cudf::data_type dt)
@@ -168,41 +194,23 @@ threshold_join_result brute_force_threshold(raft::device_resources const& res,
         pairwise_metric,
         2.0f);
 
-      // (2) Norm correction → true distance for the expanded metrics. Copied
-      //     faithfully from tiled_brute_force_knn's map_offset epilogue.
-      if (expanded) {
-        auto* dist        = temp_dist.data();
-        auto const* qn    = q_norms.data();
-        auto const* dn    = d_norms.data();
-        bool const sqrt_l2 = metric == cuvs::distance::DistanceType::L2SqrtExpanded;
-        bool const cosine  = metric == cuvs::distance::DistanceType::CosineExpanded;
-        raft::linalg::map_offset(
-          res,
-          raft::make_device_vector_view<float, int64_t>(dist, ntil),
-          [=] __device__(int64_t idx) {
-            int64_t row = i + (idx / cs);
-            int64_t col = j + (idx % cs);
-            if (cosine) { return 1.0f - dist[idx] / (qn[row] * dn[col]); }
-            // L2 expanded, inlined from cuVS l2_exp_cutlass_op: qn/dn are squared
-            // norms, dist holds the inner product. d^2 = |q|^2 + |d|^2 - 2<q,d>.
-            float outv = qn[row] + dn[col] - 2.0f * dist[idx];
-            // Self-neighbor round-off guard: when the two rows have equal norm and
-            // the residual is within float precision, snap it to exactly zero.
-            if (outv * outv < 1e-6f && qn[row] == dn[col]) { outv = 0.0f; }
-            return sqrt_l2 ? sqrtf(outv > 0.0f ? outv : 0.0f) : outv;
-          });
-      }
+      // Fused (2) norm correction + (3) compaction to save some i/o's
+      true_distance_op const td{temp_dist.data(),
+                                q_norms.data(),
+                                d_norms.data(),
+                                i,
+                                j,
+                                cs,
+                                expanded,
+                                metric == cuvs::distance::DistanceType::L2SqrtExpanded,
+                                metric == cuvs::distance::DistanceType::CosineExpanded};
 
-      // (3) Compaction: keep flat indices whose distance passes the threshold.
-      //     The `<= / >=` is the predicate; copy_if turns "which pass" into a
-      //     compact list, so we never keep the dense tile beyond this pass.
       auto const first = thrust::make_counting_iterator<int64_t>(0);
-      auto const* dist = temp_dist.data();
       auto* kept_end   = thrust::copy_if(
         policy, first, first + static_cast<int64_t>(ntil), kept.data(),
         [=] __device__(int64_t f) {
-          float v = dist[f];
-          return select_min ? (v <= eps) : (v >= eps);
+          float v = td(f);
+          return select_min ? v <= eps : v >= eps;
         });
       auto const tile_nnz = static_cast<std::size_t>(kept_end - kept.data());
       if (tile_nnz == 0) continue;
@@ -226,7 +234,7 @@ threshold_join_result brute_force_threshold(raft::device_resources const& res,
           int64_t f = kept_idx[t];
           oq[t]     = i + (f / cs);  // local query-batch row
           on[t]     = j + (f % cs);  // local dataset-batch row
-          od[t]     = dist[f];
+          od[t]     = td(f);
         });
     }
   }
