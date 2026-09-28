@@ -91,10 +91,10 @@ The condition takes one of three forms, each studied under its own name:
 The similarity join is decades old, and its history falls into three stages, distinguished by where the join runs: as a standalone algorithm, as an operator in research systems, and as SQL in production engines.
 
 The first stage, from the 1990s to the mid-2000s, defined the problem and its algorithms.
-Similarity joins grew out of spatial joins, which matches two sets of objects by location rather than by equal keys~\cite{BrinkhoffSpatialJoin93}, and moved to high dimensions in the late 1990s when data mining and multimedia retrival began describing objects as feature vectors.
+Similarity joins grew out of spatial joins, which match two sets of objects by location rather than by equal keys~\cite{BrinkhoffSpatialJoin93}, and moved to high dimensions in the late 1990s when data mining and multimedia retrieval began describing objects as feature vectors.
 To avoid comparing every pair, these algorithms partitioned or ordered the space with a multidimensional index~\cite{ShimSimJoin97}, a grid order~\cite{BohmEGO01}, or a grid order over the data's principal components~\cite{XiaGorder04}, so that only pairs in nearby regions were compared.
 This pruning weakens as dimensionality grows, because in high dimensions most pairs are roughly equally far apart~\cite{BeyerNNMeaningful99}; at the hundreds of dimensions of modern embeddings, these methods approach a full pairwise scan.
-Later theoretical work confirmed the limit (for inner-product): under standard complexity assumptions, no exact algorithm is substantially faster than comparing every pair once the dimensionality is high~\cite{AhleInnerProductJoin16}.
+Later theoretical work confirmed the limit for inner-product similarity: under standard complexity assumptions, no exact algorithm is substantially faster than comparing every pair once the dimensionality is high~\cite{AhleInnerProductJoin16}.
 
 The second stage, from the mid-2000s through the 2010s, built similarity joins into systems.
 Chaudhuri et al.\ proposed SSJoin, a set-similarity join operator for data cleaning in a relational engine~\cite{ChaudhuriSSJoin06}, and Silva et al.\ implemented the similarity join as a database operator in PostgreSQL, where it outperformed the same queries written with standard operators~\cite{SilvaSimJoinOp10}.
