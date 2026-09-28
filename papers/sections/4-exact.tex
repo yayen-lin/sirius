@@ -1,8 +1,25 @@
+
+\yxy{Before "Exact Vector Join" section, we need another section, maybe called Vector Join Overview. There we need to discuss a few things.
+\\
+1. Vector Join Use Cases. Example applications that vector join enables that vector search cannot support. Also briefly discuss how vector join is different from prior work in semantic similarity join. Show an example query.
+\\
+2. Vector Join API. Here, formally discuss TVF API we support: show the TVF input list, and use the example query above to show how it fits into a SQL query. Need particular focus on the three reduction methods (per-row, global, threshold). You can reused the text in the current Sec 4.3. Then say native SQL integration is future work; Spark and DuckDB's current NEREAST API are good starting points. }
+
+
 \section{Exact Vector Join}\label{sec:technical-1:-exact}
+
+\yxy{
+    We need a new diagram illustrating exact join: we join two columns, neither column fits in GPU memory. Then show that both columns are partitioned and we load a pair of partitions at a time and join them. There is per-partition join (using cuVS, GEMM) and there is local reduction followed by a global reduction. (this diagram is not easy to make. Just do you best and we can iterate)}
+
+\yxy{The discussion in this section can largely follow diagram: basically the text is just explaining the diagram with details. A lot of existing text can be reused. Try not to get into too low level details in your discussion (like specific cuVS/Thrust functions)}
+
+\yxy{Given the new section on "Vector Join Overview", the exact vector join section does not need to be long. If it ends up being short, we can also merge these two sections.}
 
 \input{approx-exact}
 
 \subsection{Super Sirius}\label{subsec:super-sirius}
+
+\yxy{We don't need to talk about Sirius here. We can discuss the implementation details within Evaluation or a new "Implementation" section before Evaluation. But here let's focus on the exact join algo itself.}
 
 Sirius is a GPU-native SQL engine.
 It builds on established NVIDIA libraries such as \emph{cuDF} for columnar relational operators and \emph{RMM} for GPU memory allocation, and it ranked first on ClickBench just last year~\cite{SiriusClickBench25}.
@@ -24,7 +41,7 @@ It is the most straightforward to build, and it is the foundation the approximat
 For now the join is reached through a table function and requires both tables pinned in GPU memory.
 This is an implementation convenience we return to in Section~\ref{subsec:exact-native}: once a vector join gains a matchable SQL surface, the engine feeds and tiers its batches the same way it does for every other operator.
 
-The join returns one of the three reduction outcomes from Section~\ref{subsec:vector-join}, the $k$ nearest per probe row, the $k$ nearest pairs overall, or every pair within a threshold $\varepsilon$, and we express all three as Sirius operators.
+The join returns one of the three reduction outcomes from Section~\ref{subsec:the-vector-join}, the $k$ nearest per probe row, the $k$ nearest pairs overall, or every pair within a threshold $\varepsilon$, and we express all three as Sirius operators.
 When the corpus fits in GPU memory, the exact join is a brute-force walk over batches (Figure~\ref{fig:exact}).
 Sirius reads both tables as batches, so the probe side arrives as a batch of query rows rather than a single query vector, and a brute-force search over one such batch is already a top-$k$ join between it and one corpus batch.
 The join visits every pair of a probe batch and a corpus batch, runs top-$k$ on the pair, and merges each probe row's results across all corpus batches into its final top-$k$.
@@ -82,4 +99,4 @@ Neither table has to be pinned or fit in GPU memory, because the engine streams 
 
 % lastly our situation now
 Top-$k$ per-row and global do not have this surface yet.
-Their syntax sugar lowers to a lateral join, whose plan shape the interceptor cannot match, so today they are reached through a table function that requires both tables to be pinned in GPU memory.
+Their syntax sugar lowers to a lateral join, whose plan shape the interceptor cannot match, so today they are reached through a table function that requires both tables to be pinned in GPU memory.\yxy{these are temporary limitations in the current implementation. not need to mention in the paper.}

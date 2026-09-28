@@ -47,6 +47,7 @@ Stonebraker and Pavlo argue that vector search is a feature, not an architecture
 The vector join is where that absorption pays off, because it is a relational join, for the following reason.
 Its join predicate is a non-equi condition that ranks candidate pairs by distance (unlike a hash join, which is a equi-join by matching index), and it is followed by a reduction that selects which ranked pairs survive.
 These are the vector analogues of the reductions that OLAP engines already optimize, and the \texttt{NEAREST BY} proposals encode exactly this structure~\cite{ApacheSparkJIRA56395, DatabricksNearestBy26}.
+\andy{pitch parked from S2.2: ``users would prefer good-enough vector ops in their existing DB over a separate dedicated vector DB; for mixed workloads integrated wins on operational simplicity and cost.'' Don't argue user preference (needs evidence). Argue it structurally: dedicated vector DBs have no joins, and a join's inputs come from relational ops (filters, other joins), so the vector join belongs in the relational engine. Stonebraker \& Pavlo now cited in S2.2 --- refer back instead of re-citing. Pairs with the Sirius drop-in pitch in S4.1.}
 
 \yxy{The point of this section is to argue a vector join is just another join. But according to S3.3, vector join is already integrated into real systems; so it is a bit awkward to argue for something that is already real. I suggest just expand S3.3 a little bit with the contents where, to argue briefly vector join should be a join operator, and use databricks/DuckDB as evidence.}
 
@@ -77,6 +78,7 @@ The expected payoff is throughput.
 A single GPU delivers what a join needs by reusing the same on-device search primitives that libraries such as cuVS~\cite{NvidiaCuVS26} already provide.
 The surprising one is exactness.
 A tiled brute-force join computes the distance matrix in blocks and never materializes it in full, so the answer stays exact where CPU systems had to settle for approximate search on cost alone.
+\andy{pitch parked from S2.2: ``exact vector search on GPU competes with approximate search on CPU engines.'' Scope it to joins only --- for a single query, CPU HNSW is sub-ms and GPU brute force won't win (S2.2 now says single-query GPU gain is small). Back it with Exp1: Sirius exact vs.\ DuckDB HNSW on the same probe set, report time and recall (1.0 vs.\ HNSW).}
 Building the operator inside a GPU-native SQL engine~\cite{Yogatama26} keeps it on the device alongside the scans, filters, and aggregations of the surrounding query, so the vector join runs as one stage of the same GPU pipeline.
 
 Moreover, Sirius ranks first on ClickBench~\cite{SiriusClickBench25} on analytical workloads, and it does so on the same join, filter, and aggregate machinery that a vector join reuses.
