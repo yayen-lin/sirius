@@ -36,11 +36,6 @@ namespace sirius::vss {
 /**
  * @brief Result of a threshold (radius) join between one query batch and one
  * dataset batch.
- *
- * Unlike @ref knn_result, the output is a ragged edge list: one row per
- * surviving (query, dataset) pair, in no particular order. All three columns
- * share the same length @p n_edges. There is no `k` — a query row contributes as
- * many edges as it has dataset rows within @p eps (possibly zero).
  */
 struct threshold_join_result {
   std::unique_ptr<cudf::column> query_rows;  ///< INT64 local query-batch row index.

@@ -754,6 +754,7 @@ void insert_gpu_pipeline_operators_recursive(
     case sirius::op::SiriusPhysicalOperatorType::TOP_N: wrap_top_n(slot); break;
     case sirius::op::SiriusPhysicalOperatorType::HASH_JOIN:
     case sirius::op::SiriusPhysicalOperatorType::NESTED_LOOP_JOIN:
+    case sirius::op::SiriusPhysicalOperatorType::VECTOR_THRESHOLD_JOIN:
       wrap_join(*slot, op_params, compressed_materialization_observer);
       break;
     case sirius::op::SiriusPhysicalOperatorType::LEFT_DELIM_JOIN:
@@ -1126,8 +1127,7 @@ sirius_physical_plan_generator::create_plan(duckdb::LogicalOperator& op)
       plan = create_plan(op.Cast<duckdb::LogicalDummyScan>());
       break;
     case duckdb::LogicalOperatorType::LOGICAL_ANY_JOIN:
-      throw duckdb::NotImplementedException("Any join not supported");
-      // plan = create_plan(op.Cast<duckdb::LogicalAnyJoin>());
+      plan = create_plan(op.Cast<duckdb::LogicalAnyJoin>());
       break;
     case duckdb::LogicalOperatorType::LOGICAL_ASOF_JOIN:
       throw duckdb::NotImplementedException("Asof join not supported");
