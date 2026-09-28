@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+REPS=10
 EPS=250
 TIMEOUT=1h
 SIRIUS_TIMEOUT=2h
@@ -12,19 +13,18 @@ CLI="$REPO/build/release/duckdb"
 SRC="$REPO/bench/vector/data/bigann10m_sliced.duckdb"
 CORPUS=base_10m
 
-# label:probe_rows:reps, fewer reps once a single query takes minutes
 SIZES=(
-  "1:1:10"
-  "10:10:10"
-  "100:100:10"
-  "1k:1000:10"
-  "10k:10000:5"
-  "100k:100000:3"
-  "1m:1000000:1"
-  "10m:10000000:1"
+  "1:1"
+  "10:10"
+  "100:100"
+  "1k:1000"
+  "10k:10000"
+  "100k:100000"
+  "1m:1000000"
+  "10m:10000000"
 )
 
-echo "probesweep src=$(basename "$SRC") corpus=$CORPUS eps=$EPS sizes=[$(for s in "${SIZES[@]}"; do printf '%s ' "${s%%:*}"; done)]"
+echo "probesweep src=$(basename "$SRC") corpus=$CORPUS eps=$EPS reps=$REPS sizes=[$(for s in "${SIZES[@]}"; do printf '%s ' "${s%%:*}"; done)]"
 
 query()  { echo "SELECT count(*) FROM base_$1 l JOIN $CORPUS r ON array_distance(l.vec, r.vec) <= $EPS;"; }
 warmup() { echo "SELECT count(*) FROM (SELECT vec FROM base_$1 LIMIT 1) l JOIN $CORPUS r ON array_distance(l.vec, r.vec) <= $EPS;"; }
@@ -70,8 +70,9 @@ DIM=$("$CLI" -csv -noheader "$SRC" -c "SELECT len(vec) FROM $CORPUS LIMIT 1;")
 INNER=$("$CLI" -csv -noheader "$SRC" -c "SELECT count(*) FROM $CORPUS;")
 
 for entry in "${SIZES[@]}"; do
-  IFS=: read -r LABEL N REPS <<< "$entry"
-  echo "running $LABEL (N=$N, reps=$REPS)" >&2
+  LABEL="${entry%%:*}"
+  N="${entry#*:}"
+  echo "running $LABEL (N=$N)" >&2
 
   PAIRS=$((N * INNER))
   DIST_OPS=$((PAIRS * DIM))
