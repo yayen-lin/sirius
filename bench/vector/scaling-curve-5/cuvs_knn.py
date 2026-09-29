@@ -51,5 +51,5 @@ for rep in range(args.reps):
     distances, neighbors = brute_force.search(index, queries, args.k)
     cp.cuda.Device().synchronize()
     if rep == 0:
-        print("num results: ", cp.asarray(neighbors).size)
+        print(cp.asarray(neighbors).size)
     print(f"Run Time (s): real {time.perf_counter() - t0:.6f}", flush=True)

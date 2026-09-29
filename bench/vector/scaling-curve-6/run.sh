@@ -66,7 +66,6 @@ emit_row() {
     "$2" "$2" "$2" "-" "-" >> "$BUF"
 }
 
-# One engine on one dataset: warmup, then REPS timed queries tagged with '@@engine dataset'
 sirius_d() {
   {
     echo "SET gpu_execution = true;"
@@ -90,7 +89,6 @@ duckdb_d() {
     echo ".timer off"
   } | timeout "$TIMEOUT" "$DUCKDB_CLI" "$DB" | rows
 }
-# HNSW indexes only work on in-memory tables, so copy the data in and build the index untimed
 hnsw_d() {
   {
     echo "LOAD vss;"
