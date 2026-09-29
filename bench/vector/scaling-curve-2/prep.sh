@@ -28,6 +28,8 @@ rm -f "$OUT"
     n="${entry#*:}"
     echo "CREATE TABLE base_$label AS SELECT vec FROM src.base ORDER BY id LIMIT $n;"
   done
+  # scaling curve 6 probes the slices with these queries
+  echo "CREATE TABLE queries AS SELECT id, vec FROM src.queries ORDER BY id;"
 } | "$CLI" "$OUT"
 
 echo "created in $OUT:"
