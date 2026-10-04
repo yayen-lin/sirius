@@ -32,7 +32,7 @@ Few systems or vendors offer vector join operations today, and we believe there 
 
 \yxy{I think S3.3 can be merged into S3.2. Just one subsection making a strong case for vector join as a new fundamental operator. }
 Vector join is the workload that already appears throughout analytical pipelines under different names.
-In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points; pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{AbbasSemDeDup23}.
+In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points; pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{AbbasSemDeDup23}, and industrial pipelines run it as a threshold-filtered vector search over tens to hundreds of millions of embeddings~\cite{HuSieveIVF26}.
 In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings rather than by exact keys, which turns a classically hard matching problem into an embedding similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
 In retrieval and recommendation, an entire batch of user or query embeddings is scored against a catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
 In every case the work is inherently batched \yxy{maybe batched vector search itself is also a good example.}

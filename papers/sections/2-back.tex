@@ -22,16 +22,15 @@ Some systems add a dedicated \texttt{VECTOR} type with a declared dimension, as 
 The embeddings in such a column are produced in one of two ways.
 In the \emph{explicit} form, an embedding model runs outside the database, and its output is loaded into a table and stored like any other attribute.
 In the \emph{implicit} form, the engine invokes the model during query execution and does not persist the result.
-Snowflake~\cite{SnowflakeAIEmbed}, BigQuery~\cite{BigQueryGenerateEmbedding}, HeatWave~\cite{HeatWaveMLEmbedRow}, and SQL Server~\cite{SQLServerAIGenerateEmbeddings} expose the model as a SQL function, so any query can embed a column on the fly.
+Snowflake~\cite{SnowflakeAIEmbed}, BigQuery~\cite{BigQueryGenerateEmbedding}, HeatWave~\cite{HeatWaveMLEmbedRow}, and SQL Server~\cite{SQLServerAIGenerateEmbeddings} expose the model as a SQL function, so any query can embed a column or a query vector on the fly.
 PostgreSQL and DuckDB provide it only through extensions, such as pg\_vectorize~\cite{PgVectorizeRepo} and quackformers~\cite{DuckDBQuackformers}.
 In either form, by the time a query compares embeddings, they form a column of equal-length vectors, whether read from storage or computed as an intermediate result.\andy{(this reads a bit off)}
 
 \subsection{Similarity Search}\label{subsec:vector-search}
 
 % what is a vector/semantic/similarity search & exact and approximate
-A similarity search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.
 % \yxy{maybe give a quick example of a vector search query}
-
+A similarity search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.
 In SQL it is an ordering by distance followed by a limit; the DuckDB query below returns the five documents closest to a query embedding \texttt{\$q}:
 
 \begin{lstlisting}[language=SQL, basicstyle=\ttfamily\small, frame=none]
@@ -61,7 +60,7 @@ And because the rest of an application's data stays in a relational database, ve
 
 % integrated into relational databases
 Relational databases add similarity search in three pieces: a vector column type, distance functions or operators, and an ANN index registered as a new index type.
-With these in place, the optimizer can answer the query above with an index scan instead of a full sort, and the search composes with filters and joins like any other SQL\@.
+With these in place, the optimizer can answer the query above with an index scan, and the search composes with filters and joins like any other SQL\@.
 Stonebraker and Pavlo point to this integration as evidence that similarity search is a feature rather than a new architecture, and predict that relational engines will absorb it~\cite{StonebrakerPavloAround24}.
 A case study of PostgreSQL by Zhang et al.\ concludes that relational databases have no inherent barrier to efficient vector search, and that the remaining performance gap comes from implementation choices~\cite{ZhangPgLimits24}.
 The syntax, however, is not yet standardized: the same search is an \texttt{ORDER BY} with \texttt{LIMIT} in pgvector~\cite{PgvectorRepo} and DuckDB~\cite{DuckDBVSS}, an \texttt{ORDER BY} with \texttt{FETCH APPROX FIRST} in Oracle~\cite{OracleAIVectorSearch}, and a \texttt{VECTOR\_SEARCH} table function in BigQuery~\cite{BigQueryVectorSearchFn} and SQL Server~\cite{SQLServerVectorSearchFn}, though a vector extension is under way for the next SQL standard~\cite{EisentrautSQL202y25}.
@@ -106,13 +105,13 @@ This pruning weakens as dimensionality grows, because in high dimensions most pa
 The second stage, from the mid-2000s through the 2010s, built similarity joins into systems.
 Chaudhuri et al.\ proposed SSJoin, a set-similarity join operator for data cleaning in a relational engine~\cite{ChaudhuriSSJoin06}, and Silva et al.\ implemented the similarity join as a database operator in PostgreSQL, where it outperformed the same queries written with standard operators~\cite{SilvaSimJoinOp10}.
 As data outgrew a single machine, kNN joins were distributed over MapReduce~\cite{LuKNNMapReduce12} and Spark SQL~\cite{XieSimba16}, and the $\varepsilon$-join was ported to the GPU~\cite{LiebermanGPUSimJoin08, GowanlockGPUSelfJoin19}.
-These systems remained research prototypes, and the GPU joins were standalone kernels rather than operators inside a query engine.
+These systems remained research prototypes, and the GPU joins were standalone algorithms rather than operators inside a query engine.
 
 The third stage, from the 2020s onward, is driven by learned embeddings.
 Workloads such as deduplication, entity resolution, and batch retrieval are similarity joins over embeddings (Section~\ref{subsec:the-work}), and production SQL engines are beginning to expose the join directly.
 DuckDB ships \texttt{vss\_join} and \texttt{vss\_match} macros that compute the join by brute force~\cite{DuckDBVSS}, and an \texttt{HNSW\_INDEX\_JOIN} operator that evaluates a lateral join by probing its HNSW index once per probe row~\cite{DuckDBVSSBlog24}.
 BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~\cite{BigQueryVectorSearchFn}.
-A \texttt{NEAREST BY} clause for this join first appeared in Spark 4.2~\cite{ApacheSparkJIRA56395}, and since then, DataBricks~\cite{DatabricksNearestBy26} and DuckDB~\cite{DuckDBNearestByPR24137} has followed.
-Algorithmic work has resumed alongside, targeting approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
-In the aforementioned cases, the execution of the join runs on the CPU\@.
-In the rest of this paper, we will go in to details about how we implement a similarity join on the GPU efficiently.
+A \texttt{NEAREST BY} clause for this join first appeared in Spark 4.2~\cite{ApacheSparkJIRA56395}, and since then, DataBricks~\cite{DatabricksNearestBy26} and DuckDB~\cite{DuckDBNearestByPR24137} have followed.
+Recent algorithmic work targets approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
+To our knowledge, these systems and algorithms run the join on the CPU\@.
+The rest of this paper shows how to run the join on the GPU as an operator inside a SQL engine.
