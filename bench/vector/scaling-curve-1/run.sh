@@ -6,8 +6,8 @@ set -euo pipefail
 
 REPS=10
 EPS=250
-TIMEOUT=30m
-SIRIUS_TIMEOUT=2h
+TIMEOUT=1800
+SIRIUS_TIMEOUT=7200
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
 
@@ -46,6 +46,27 @@ rows() {
   '
 }
 
+# a watchdog times out a query if it goes over the specified time
+watchdog() {
+  local limit=$1 pidf rc=0
+  shift
+  pidf=$(mktemp)
+  # line buffered, so a line shows up when its search ends, not when the buffer fills
+  ( echo "$BASHPID" > "$pidf"; exec stdbuf -oL "$@" ) | {
+    armed=0
+    while :; do
+      if [ "$armed" -eq 1 ]; then IFS= read -r -t "$limit" line; else IFS= read -r line; fi
+      r=$?
+      if [ "$r" -gt 128 ]; then kill "$(cat "$pidf")" 2>/dev/null; exit 124; fi
+      if [ "$r" -ne 0 ]; then [ -n "$line" ] && printf '%s\n' "$line"; exit 0; fi
+      [ "$line" = "##go" ] && armed=1
+      printf '%s\n' "$line"
+    done
+  } || rc=$?
+  rm -f "$pidf"
+  return "$rc"
+}
+
 BUF="$(mktemp)"
 trap 'rm -f "$BUF"' EXIT
 
@@ -77,6 +98,7 @@ for entry in "${DATASETS[@]}"; do
     emit_row sirius TIMEOUT
   elif {
     echo "SET gpu_execution = true;"
+    echo ".print ##go"
     warmup
     echo ".timer on"
     for i in $(seq $REPS); do
@@ -84,7 +106,7 @@ for entry in "${DATASETS[@]}"; do
       query
     done
     echo ".timer off"
-  } | timeout "$SIRIUS_TIMEOUT" "$CLI" "$DB" | rows >> "$BUF"
+  } | watchdog "$SIRIUS_TIMEOUT" "$CLI" "$DB" | rows >> "$BUF"
   then :
   else
     code=$?
@@ -100,6 +122,7 @@ for entry in "${DATASETS[@]}"; do
     emit_row duckdb TIMEOUT
   elif {
     echo "SET gpu_execution = false;"
+    echo ".print ##go"
     warmup
     echo ".timer on"
     for i in $(seq $REPS); do
@@ -107,7 +130,7 @@ for entry in "${DATASETS[@]}"; do
       query
     done
     echo ".timer off"
-  } | timeout "$TIMEOUT" "$CLI" "$DB" | rows >> "$BUF"
+  } | watchdog "$TIMEOUT" "$CLI" "$DB" | rows >> "$BUF"
   then :
   else
     code=$?

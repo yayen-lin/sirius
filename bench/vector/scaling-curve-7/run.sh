@@ -1,25 +1,35 @@
 #!/usr/bin/env bash
-# Usage: ./bench/vector/scaling-curve-3/run.sh
-# Title: scaling curve 3, growing dimensionality, duckdb vs sirius
+# Usage: ./bench/vector/scaling-curve-7/run.sh
+# Title: scaling curve 7, per-row top-k join with growing probe, fixed 10M corpus, duckdb vs sirius
 
 set -euo pipefail
 
 REPS=10
-EPS=0.5
-TIMEOUT=1800
-SIRIUS_TIMEOUT=1800
+K=10
+TIMEOUT=3600
+SIRIUS_TIMEOUT=7200
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
-SRC="$REPO/bench/vector/data/gist1m_dims.duckdb"
+SRC="$REPO/bench/vector/data/bigann10m_sliced.duckdb"
+CORPUS=base_10m
 
-DIMS=(128 256 512 768 960)
+SIZES=(
+  "1:1"
+  "10:10"
+  "100:100"
+  "1k:1000"
+  "10k:10000"
+  "100k:100000"
+  "1m:1000000"
+  "10m:10000000"
+)
 
-echo "dimsweep src=$(basename "$SRC") eps=$EPS reps=$REPS dims=[${DIMS[*]}]"
+echo "probesweep src=$(basename "$SRC") corpus=$CORPUS k=$K reps=$REPS sizes=[$(for s in "${SIZES[@]}"; do printf '%s ' "${s%%:*}"; done)]"
 
-query()  { echo "SELECT count(*) FROM queries_d$1 l JOIN base_d$1 r ON array_distance(l.vec, r.vec) <= $EPS;"; }
-warmup() { echo "SELECT count(*) FROM (SELECT vec FROM queries_d$1 LIMIT 1) l JOIN base_d$1 r ON array_distance(l.vec, r.vec) <= $EPS;"; }
+query()  { echo "SELECT count(*) FROM base_$1 l, LATERAL (SELECT array_distance(l.vec, r.vec) AS dist FROM $CORPUS r ORDER BY array_distance(l.vec, r.vec) LIMIT $K) rr;"; }
+warmup() { echo "SELECT count(*) FROM (SELECT vec FROM base_$1 LIMIT 1) l, LATERAL (SELECT array_distance(l.vec, r.vec) AS dist FROM $CORPUS r ORDER BY array_distance(l.vec, r.vec) LIMIT $K) rr;"; }
 rows() {
-  awk -v dim="$DIM" -v probe="$OUTER" -v corpus="$INNER" -v pairs="$PAIRS" -v dist_ops="$DIST_OPS" '
+  awk -v dim="$DIM" -v probe="$N" -v corpus="$INNER" -v pairs="$PAIRS" -v dist_ops="$DIST_OPS" '
     /^@@/  { block = substr($0, 3); want=1; next }
     /real/ { for (i=1;i<=NF;i++) if ($i=="real") t=$(i+1)
              n[block]++; sum[block]+=t
@@ -35,8 +45,8 @@ rows() {
                mspo = (dops>0 ? mean/dops : 0)   # ms spent per distance element-op
                gops = (mean>0 ? dops/mean/1e6 : 0) # billion distance element-ops per second
                printf "%-8s %10s %4d %11s %5s %11s %12s %11g %11g %11.1f %11.1f %11.1f %15.10f %24.2f\n",
-                      a[1], a[2], n[b], (b in rows ? rows[b] : "-"), "",
-                      probe, corpus, pairs+0, dist_ops+0,
+                      a[1], a[2], n[b], (b in rows ? rows[b] : "-"),
+                      dim, probe, corpus, pairs+0, dist_ops+0,
                       1000*mn[b], mean, 1000*mx[b],
                       mspo, gops } }
   '
@@ -70,21 +80,22 @@ trap 'rm -f "$BUF"' EXIT
 emit_row() {
   echo "$1 $LABEL: $2" >&2
   printf "%-8s %10s %4d %11s %5s %11s %12s %11g %11g %11s %11s %11s %15s %24s\n" \
-    "$1" "$LABEL" "$REPS" "$2" "" "$OUTER" "$INNER" "$PAIRS" "$DIST_OPS" \
+    "$1" "$LABEL" "$REPS" "$2" "$DIM" "$N" "$INNER" "$PAIRS" "$DIST_OPS" \
     "$2" "$2" "$2" "-" "-" >> "$BUF"
 }
 
 DUCKDB_DEAD=0
 SIRIUS_DEAD=0
 
-for D in "${DIMS[@]}"; do
-  LABEL="$D"
-  echo "running $LABEL" >&2
+DIM=$("$CLI" -csv -noheader "$SRC" -c "SELECT len(vec) FROM $CORPUS LIMIT 1;")
+INNER=$("$CLI" -csv -noheader "$SRC" -c "SELECT count(*) FROM $CORPUS;")
 
-  DIM=$D
-  OUTER=$("$CLI" -csv -noheader "$SRC" -c "SET gpu_execution=false; SELECT count(*) FROM queries_d$D;")
-  INNER=$("$CLI" -csv -noheader "$SRC" -c "SET gpu_execution=false; SELECT count(*) FROM base_d$D;")
-  PAIRS=$((OUTER * INNER))
+for entry in "${SIZES[@]}"; do
+  LABEL="${entry%%:*}"
+  N="${entry#*:}"
+  echo "running $LABEL (N=$N)" >&2
+
+  PAIRS=$((N * INNER))
   DIST_OPS=$((PAIRS * DIM))
 
   # --- Sirius ---
@@ -94,11 +105,11 @@ for D in "${DIMS[@]}"; do
   elif {
     echo "SET gpu_execution = true;"
     echo ".print ##go"
-    warmup "$D"
+    warmup "$LABEL"
     echo ".timer on"
     for i in $(seq $REPS); do
       echo ".print @@sirius $LABEL"
-      query "$D"
+      query "$LABEL"
     done
     echo ".timer off"
   } | watchdog "$SIRIUS_TIMEOUT" "$CLI" "$SRC" | rows >> "$BUF"
@@ -118,11 +129,11 @@ for D in "${DIMS[@]}"; do
   elif {
     echo "SET gpu_execution = false;"
     echo ".print ##go"
-    warmup "$D"
+    warmup "$LABEL"
     echo ".timer on"
     for i in $(seq $REPS); do
       echo ".print @@duckdb $LABEL"
-      query "$D"
+      query "$LABEL"
     done
     echo ".timer off"
   } | watchdog "$TIMEOUT" "$CLI" "$SRC" | rows >> "$BUF"
@@ -137,5 +148,5 @@ for D in "${DIMS[@]}"; do
 done
 
 { printf "\n%-8s %10s %4s %11s %5s %11s %12s %11s %11s %11s %11s %11s %15s %24s\n" \
-    engine dim reps rows "" probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
-  sort -k1,1 -k2,2n "$BUF"; }
+    engine probe reps rows dim probe_rows corpus_rows pairs dist_ops min_ms mean_ms max_ms ms_per_op billion_dist_ops_per_sec
+  sort -k1,1 -k6,6n "$BUF"; }
