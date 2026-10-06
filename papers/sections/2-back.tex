@@ -17,6 +17,7 @@ We use the terms \emph{embedding} and \emph{vector} interchangeably.
 % \yxy{add citations after each individual system}
 
 % how they are integrated into databases, explicit vs implicit
+\andy{add some info about databricks here too}
 Relational databases store embeddings as a column.
 Some systems add a dedicated \texttt{VECTOR} type with a declared dimension, as in pgvector~\cite{PgvectorRepo}, Snowflake~\cite{SnowflakeVector}, SQL Server~\cite{SQLServer2025Vector}, and MySQL~\cite{MySQLHeatWaveVector}, while others reuse an existing array type, as in DuckDB~\cite{DuckDBVSS}, ClickHouse~\cite{ClickHouseVSS}, and BigQuery~\cite{BigQueryVectorSearchFn}.
 The embeddings in such a column are produced in one of two ways.
@@ -24,7 +25,7 @@ In the \emph{explicit} form, an embedding model runs outside the database, and i
 In the \emph{implicit} form, the engine invokes the model during query execution and does not persist the result.
 Snowflake~\cite{SnowflakeAIEmbed}, BigQuery~\cite{BigQueryGenerateEmbedding}, HeatWave~\cite{HeatWaveMLEmbedRow}, and SQL Server~\cite{SQLServerAIGenerateEmbeddings} expose the model as a SQL function, so any query can embed a column or a query vector on the fly.
 PostgreSQL and DuckDB provide it only through extensions, such as pg\_vectorize~\cite{PgVectorizeRepo} and quackformers~\cite{DuckDBQuackformers}.
-In either form, by the time a query compares embeddings, they form a column of equal-length vectors, whether read from storage or computed as an intermediate result.\andy{(this reads a bit off)}
+In either form, the embeddings reach the execution engine as a column of fixed-length vectors, and similarity computation becomes an ordinary relational operation.
 
 \subsection{Similarity Search}\label{subsec:vector-search}
 
@@ -75,7 +76,7 @@ Research has extended GPU search to graph indexes~\cite{ZhaoSONG19, GrohGGNN22},
 Commercial systems use the GPU mostly to build indexes rather than to search them.
 Elasticsearch~\cite{ElasticGPUIndexing}, OpenSearch~\cite{OpenSearchGPU25}, Solr~\cite{SolrCuVS}, and Oracle~\cite{OracleVectorIndexService} build the index on the GPU and serve queries from the CPU, typically by building a CAGRA graph and converting it to HNSW\@.
 Milvus~\cite{MilvusGPUIndex} and Kinetica~\cite{KineticaVectorSearch} are the exceptions: they also run the search on the GPU (see Section~\ref{sec:related} for a discussion).
-In all of these systems, the query side is a single vector, or a batch of independent vectors submitted by a client.
+In all of these systems, the query side is a single vector or a batch of vectors that a client submits.
 When the query side is instead a relation, whether stored or produced by other operators in the same query, the search becomes an operation between two relations: a similarity join.
 
 \subsection{Similarity Join}\label{subsec:vector-join}
@@ -104,7 +105,8 @@ This pruning weakens as dimensionality grows, because in high dimensions most pa
 
 The second stage, from the mid-2000s through the 2010s, built similarity joins into systems.
 Chaudhuri et al.\ proposed SSJoin, a set-similarity join operator for data cleaning in a relational engine~\cite{ChaudhuriSSJoin06}, and Silva et al.\ implemented the similarity join as a database operator in PostgreSQL, where it outperformed the same queries written with standard operators~\cite{SilvaSimJoinOp10}.
-As data outgrew a single machine, kNN joins were distributed over MapReduce~\cite{LuKNNMapReduce12} and Spark SQL~\cite{XieSimba16}, and the $\varepsilon$-join was ported to the GPU~\cite{LiebermanGPUSimJoin08, GowanlockGPUSelfJoin19}.
+As data outgrew a single machine, kNN joins were distributed over MapReduce~\cite{LuKNNMapReduce12} and Spark SQL~\cite{XieSimba16}.
+Separately, the $\varepsilon$-join was ported to the GPU to exploit its parallelism~\cite{LiebermanGPUSimJoin08, GowanlockGPUSelfJoin19}.
 These systems remained research prototypes, and the GPU joins were standalone algorithms rather than operators inside a query engine.
 
 The third stage, from the 2020s onward, is driven by learned embeddings.
@@ -114,4 +116,4 @@ BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~
 A \texttt{NEAREST BY} clause for this join first appeared in Spark 4.2~\cite{ApacheSparkJIRA56395}, and since then, DataBricks~\cite{DatabricksNearestBy26} and DuckDB~\cite{DuckDBNearestByPR24137} have followed.
 Recent algorithmic work targets approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
 To our knowledge, these systems and algorithms run the join on the CPU\@.
-The rest of this paper shows how to run the join on the GPU as an operator inside a SQL engine.
+The rest of this paper shows why and how to run the join on the GPU as an operator inside a SQL engine.

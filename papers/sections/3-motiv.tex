@@ -11,7 +11,7 @@ Relational workloads split into transaction processing (OLTP) and analytical pro
 problems~\cite{StonebrakerPavloAround24}.
 An OLTP query asks ``what matches this'': it looks up one customer, one order, or one account, and returns in milliseconds.
 An OLAP query asks ``what matches what'': it joins whole tables against each other and aggregates the result, as in total sales by region over the last quarter.
-OLTP serves lookups from persistent indexes built ahead of time (i.e., B-trees) and is measured by latency, while OLAP scans its inputs and builds temporary structures (i.e., a hash table) at query time over intermediate results, and is measured by throughput.
+OLTP serves lookups from persistent indexes built ahead of time (e.g., B-trees) and is measured by latency, while OLAP scans its inputs and builds temporary structures (e.g., a hash table) at query time over intermediate results, and is measured by throughput.
 Stonebraker and \c{C}etintemel argued that these differences end the era of a single general-purpose engine, and that row stores designed for OLTP lose to specialized engines on analytical workloads~\cite{StonebrakerOneSize05}.
 Column stores such as C-Store and MonetDB proved this in practice and analytical processing grew into its own execution model and field of study~\cite{StonebrakerCStore05, IdreosMonetDB12, StonebrakerPavloAround24}.
 These engines now form the basis of decision support and the analysis of historical data that organizations use to guide business decisions~\cite{ChaudhuriDayal97}.
@@ -21,8 +21,7 @@ We argue that vector data is now at the same turning point (Figure~\ref{fig:quad
 Similarity search is the OLTP half: it asks ``what is similar to this'' and returns the nearest neighbors of one query vector.
 The similarity join is the OLAP half: it asks ``what is similar to what'' and relates the rows of one table of vectors to the rows of another.
 It introduces a new kind of relation.
-A relational join follows relationships that someone declared ahead of time as keys, while a similarity join finds relationships that nobody declared, and between rows that share no key but a meaning.
-Like any relation, its output can be filtered, aggregated, and joined again by the rest of the query.
+A relational join follows relationships that were declared ahead of time as keys, while a similarity join finds relationships that nobody declared, and between rows that share no key but a meaning.
 Recent trends in hardware and storage make this relation affordable to compute.
 Columnar engines store a column of embeddings as one contiguous matrix, and the GPU is built to compare one matrix against another (Section~\ref{subsec:why-gpu-database}).
 Just as column stores made it cheap enough to ask new questions of structured data, the GPU and columnar storage together make it cheap enough to relate unstructured data, such as text, images, and audio at the scale of whole collections.
@@ -33,7 +32,7 @@ The workloads for the similarity join already exist under different names.
 In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points, and pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{HuSieveIVF26, AbbasSemDeDup23}.
 In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings, which turns a classically hard matching problem into a simple embedding similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
 In retrieval and recommendation, an entire batch of user or query embeddings is scored against a catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
-More generally, a batched similarity search is already a similarity join, and it's how GPU libraries design their search APIs (Section~\ref{subsec:vector-search}).
+More generally, a batched similarity search is already a similarity join, and it is how GPU libraries design their search APIs (Section~\ref{subsec:vector-search}).
 However, the two halves are not equally developed.
 The OLTP half is well served, with its own logical operators and optimizations for a search.
 The OLAP half has only a few operators, and to our knowledge they run on the CPU (Section~\ref{subsec:vector-join}).
@@ -49,22 +48,21 @@ Where an engine has no join, users write it as one search per probe row, which i
 Relational engines have made similarity search a logical operator (Section~\ref{subsec:vector-search}), and the similarity join has started to follow.
 DuckDB, Spark, and Databricks now expose it as a join clause, but the join exists in their syntax rather than in their execution.
 DuckDB lowers the clause to a lateral join that probes its HNSW index once per probe row~\cite{DuckDBVSSBlog24, DuckDBNearestByPR24137}, and Spark and
-Databricks document the clause but not the operator that runs it~\cite{ApacheSparkJIRA56395, DatabricksNearestBy26}.
+Databricks document the clause but not the operator that runs it~\cite{ApacheSparkJIRA56395, DatabricksNearestBy26}.\andy{this needs to be fixed because of the new blog post from databricks}
 We argue that the similarity join should be a physical operator.
-As an operator, it gets the optimizations the engine already applies to every join.
-Filters are pushed below it, so it joins only qualifying rows, and its reduction (per-row top-$k$, global top-$k$, or a threshold) is pushed into it, so only
-the surviving pairs are materialized.
+As an operator, it takes its inputs from the rest of the plan and returns a relation that the rest of the plan consumes, so it gets the optimizations the engine already applies to every join.
+Filters are pushed below it, so it joins only qualifying rows, and its reduction (per-row top-$k$, global top-$k$, or a threshold) is pushed into it, so only the surviving pairs are materialized.
 
 % the hash join as the template for the exact and approximate joins
+\andy{this needs to be reworked a little bit, add citation for grace hash join, and say inspired by grace hash join, and databricks' nearest by join}
 Our design is motivated by the hash join, which already provides everything the similarity join needs, including its pipeline.
-In a batch-based engine such as Sirius, a hash join scans both inputs, partitions each by the hash of the join key, gathers each partition's rows across batches, and joins matching partitions.
+In an engine that processes data in batches, such as Sirius, a hash join scans both inputs, partitions each by the hash of the join key, gathers each partition's rows across batches, and joins matching partitions.
 The exact similarity join runs on the same pipeline with a different kernel at the join node (Figure~\ref{fig:native-plans}).
 Since it compares every pair, both inputs form a single partition and the partitioning step does no work.
 The approximate join needs only a different partitioning step.
 A hash bucket groups rows that share a key, and a k-means cluster groups rows that lie near the same centroid, so replacing hash partitioning with k-means clustering turns the hash join's pipeline into an IVF-style approximate join.
-As with hash partitions, the clusters are built at query time, which suits inputs that are often intermediate results of filters and other joins rather than base tables with a prebuilt index.
 The gather step is unchanged and collects each cluster's rows across batches, and the join compares each probe cluster only with its nearest corpus clusters rather than with every one.
-Because both joins share one pipeline, choosing between them becomes a planning decision based on the cardinality of the inputs (Section~\ref{sec:evaluation}).
+Because the exact and approximate joins share one pipeline, choosing between them becomes a planning decision based on the cardinality of the inputs (Section~\ref{sec:evaluation}).
 
 % \yxy{this subsection looks AI generated, which is ok for now. I think we don't need very long paragraphs here. Make the points more concise and clear. We can add some simple experiments to make the points very clear. Maybe two figures showing: (1) vector search in CPU vs. GPU (small gain) and (2) vector join in CPU vs. GPU (huge gain).}
 
@@ -77,11 +75,17 @@ Under the common metrics, distance computation reduces to dot products (Section~
 A single search is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
 A join is a matrix-matrix product, in which each corpus vector is reused across many probe rows, so the work becomes compute-bound and runs as GEMM, which is the type of workload the GPU is built for.
 
+% evidence that supports the claim of the gain in vector join vs vector search
 Our measurements show this shift directly in the exact setting (Figure~\ref{fig:TODO}).
 On GIST1M, a single exact search runs about 20 times faster on Sirius than on DuckDB\@.
 On a threshold join against Bigann10M, growing the probe side from one row to 10K rows raises Sirius's throughput from 16 million to 24 billion pairs (of distance operations, a MAC operation basically) per second (\textasciitilde1,500x), while DuckDB's rises only from 62 million to 250 million (\textasciitilde4x).
 Across our threshold experiments the join runs more than 100 times faster on Sirius, and at 100K probe rows against 10M corpus vectors DuckDB does not finish within our time limit.
-The join does more total work than a search, yet the GPU's advantage grows with it, just as the analytical half of relational processing gained the most from an engine built for it.
-Running the join inside a GPU-native SQL engine also removes data movement that surrounds vector workloads today.
-Embeddings are produced by models that typically run on the GPU and are then loaded into a database that runs on the CPU (Section~\ref{subsec:embeddings-and-vectors}), systems that use the GPU for vector search often build the index there and move it back to the CPU to serve queries (Section~\ref{subsec:vector-search}), and the result of an analysis such as deduplication often returns to the GPU to train the next model.
-With the join on the GPU next to the scans, filters, and aggregates of the surrounding query, the data no longer has to cross between devices in the middle of the query, and the steps of an embedding pipeline can move toward a single device.
+The join does more total work than a search, yet the GPU's advantage grows with it.
+
+% why the GPU also removes data movement
+Running the join inside a GPU-native SQL engine also reduces data movement between devices.
+Today, vector data crosses between the CPU and the GPU at several points.
+Embedding models typically run on the GPU, but their output is loaded into a database on the CPU (Section~\ref{subsec:embeddings-and-vectors}).
+Systems that use the GPU for vector search often build the index there and move it back to the CPU to serve queries (Section~\ref{subsec:vector-search}).
+The result of an analysis such as deduplication often returns to the GPU to train the next model.
+With the join on the GPU next to the scans, filters, and aggregates of the surrounding query, the data no longer crosses devices in the middle of the query, and more of the embedding pipeline can run on a single device.
