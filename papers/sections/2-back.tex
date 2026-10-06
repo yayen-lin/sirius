@@ -1,7 +1,7 @@
 \section{Background}\label{sec:background}
 
 % facts
-\andy{TODO: mention less about CPU as that's less relevant to our work}
+\andy{TODO: mention less about CPU as that's less relevant to our work and trim down the section a bit}
 
 \subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
 
@@ -108,7 +108,7 @@ As data outgrew a single machine, kNN joins were distributed over MapReduce~\cit
 These systems remained research prototypes, and the GPU joins were standalone algorithms rather than operators inside a query engine.
 
 The third stage, from the 2020s onward, is driven by learned embeddings.
-Workloads such as deduplication, entity resolution, and batch retrieval are similarity joins over embeddings (Section~\ref{subsec:the-work}), and production SQL engines are beginning to expose the join directly.
+Workloads such as deduplication, entity resolution, and batch retrieval are similarity joins over embeddings (Section~\ref{subsec:the-transition}), and production SQL engines are beginning to expose the join directly.
 DuckDB ships \texttt{vss\_join} and \texttt{vss\_match} macros that compute the join by brute force~\cite{DuckDBVSS}, and an \texttt{HNSW\_INDEX\_JOIN} operator that evaluates a lateral join by probing its HNSW index once per probe row~\cite{DuckDBVSSBlog24}.
 BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~\cite{BigQueryVectorSearchFn}.
 A \texttt{NEAREST BY} clause for this join first appeared in Spark 4.2~\cite{ApacheSparkJIRA56395}, and since then, DataBricks~\cite{DatabricksNearestBy26} and DuckDB~\cite{DuckDBNearestByPR24137} have followed.
