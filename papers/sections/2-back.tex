@@ -19,11 +19,11 @@ We use the terms \emph{embedding} and \emph{vector} interchangeably.
 % how they are integrated into databases, explicit vs implicit
 \andy{add some info about databricks here too}
 Relational databases store embeddings as a column.
-Some systems add a dedicated \texttt{VECTOR} type with a declared dimension, as in pgvector~\cite{PgvectorRepo}, Snowflake~\cite{SnowflakeVector}, SQL Server~\cite{SQLServer2025Vector}, and MySQL~\cite{MySQLHeatWaveVector}, while others reuse an existing array type, as in DuckDB~\cite{DuckDBVSS}, ClickHouse~\cite{ClickHouseVSS}, and BigQuery~\cite{BigQueryVectorSearchFn}.
+Some systems add a dedicated \texttt{VECTOR} type with a declared dimension, as in pgvector~\cite{PgvectorRepo}, Snowflake~\cite{SnowflakeVector}, SQL Server~\cite{SQLServer2025Vector}, and MySQL~\cite{MySQLHeatWaveVector}, while others reuse an existing array type, as in DuckDB~\cite{DuckDBVSS}, ClickHouse~\cite{ClickHouseVSS}, BigQuery~\cite{BigQueryVectorSearchFn}, and Databricks~\cite{DatabricksNearestByJoinBlog26}.
 The embeddings in such a column are produced in one of two ways.
 In the \emph{explicit} form, an embedding model runs outside the database, and its output is loaded into a table and stored like any other attribute.
 In the \emph{implicit} form, the engine invokes the model during query execution and does not persist the result.
-Snowflake~\cite{SnowflakeAIEmbed}, BigQuery~\cite{BigQueryGenerateEmbedding}, HeatWave~\cite{HeatWaveMLEmbedRow}, and SQL Server~\cite{SQLServerAIGenerateEmbeddings} expose the model as a SQL function, so any query can embed a column or a query vector on the fly.
+Snowflake~\cite{SnowflakeAIEmbed}, BigQuery~\cite{BigQueryGenerateEmbedding}, HeatWave~\cite{HeatWaveMLEmbedRow}, SQL Server~\cite{SQLServerAIGenerateEmbeddings}, and Databricks~\cite{DatabricksAIQuery26} expose the model as a SQL function, so any query can embed a column or a query vector on the fly.
 PostgreSQL and DuckDB provide it only through extensions, such as pg\_vectorize~\cite{PgVectorizeRepo} and quackformers~\cite{DuckDBQuackformers}.
 In either form, the embeddings reach the execution engine as a column of fixed-length vectors, and similarity computation becomes an ordinary relational operation.
 
@@ -111,9 +111,10 @@ These systems remained research prototypes, and the GPU joins were standalone al
 
 The third stage, from the 2020s onward, is driven by learned embeddings.
 Workloads such as deduplication, entity resolution, and batch retrieval are similarity joins over embeddings (Section~\ref{subsec:the-transition}), and production SQL engines are beginning to expose the join directly.
-DuckDB ships \texttt{vss\_join} and \texttt{vss\_match} macros that compute the join by brute force~\cite{DuckDBVSS}, and an \texttt{HNSW\_INDEX\_JOIN} operator that evaluates a lateral join by probing its HNSW index once per probe row~\cite{DuckDBVSSBlog24}.
 BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~\cite{BigQueryVectorSearchFn}.
-A \texttt{NEAREST BY} clause for this join first appeared in Spark 4.2~\cite{ApacheSparkJIRA56395}, and since then, DataBricks~\cite{DatabricksNearestBy26} and DuckDB~\cite{DuckDBNearestByPR24137} have followed.
+Spark 4.2 adds a \texttt{NEAREST BY} clause for this join and evaluates it over the full cross product of its inputs~\cite{ApacheSparkJIRA56395, SparkNearestByJoin26}.
+Databricks, whose runtime builds on Spark, supports the same clause~\cite{DatabricksNearestBy26} and runs it with a fused operator that scores tiles of probe and corpus vectors with a GEMM kernel, and uses an IVF index for approximate joins~\cite{DatabricksNearestByJoinBlog26}.
+DuckDB offers brute-force join macros (\texttt{vss\_join} and \texttt{vss\_match})~\cite{DuckDBVSS}, an \texttt{HNSW\_INDEX\_JOIN} operator that probes an HNSW index once per probe row~\cite{DuckDBVSSBlog24}, and in a recent pull request, a \texttt{NEAREST BY} clause~\cite{DuckDBNearestByPR24137}.
 Recent algorithmic work targets approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
 To our knowledge, these systems and algorithms run the join on the CPU\@.
 The rest of this paper shows why and how to run the join on the GPU as an operator inside a SQL engine.
