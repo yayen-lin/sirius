@@ -2,6 +2,7 @@
 
 % facts
 \andy{TODO: mention less about CPU as that's less relevant to our work and trim down the section a bit}
+\andy{Update the name to vector join if that's what we decide to use}
 
 \subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
 
@@ -10,14 +11,13 @@ A vector embedding is a fixed-length array of numbers that a machine learning mo
 Modern embedding models produce vectors with hundreds to thousands of dimensions.
 The model is trained so that geometric proximity in the embedding space reflects semantic similarity: similar inputs map to nearby vectors, and unrelated inputs map farther apart.
 Comparing two objects semantically therefore reduces to computing a distance or similarity score between their vectors, most commonly Euclidean (L2) distance, cosine similarity, or inner product.
-All three can be computed from dot products and vector norms, so comparing many vectors against many others becomes a dense matrix multiplication.
+All three can be computed from dot products and vector norms, so comparing many vectors against many others becomes a dense matrix multiplication (Section~\ref{subsec:why-gpu-database}).
 We use the terms \emph{embedding} and \emph{vector} interchangeably.
 
 % \yxy{also explain how they are integrated into databases today: explicitly stored as columns, or implicitly generated as needed.}
 % \yxy{add citations after each individual system}
 
 % how they are integrated into databases, explicit vs implicit
-\andy{add some info about databricks here too}
 Relational databases store embeddings as a column.
 Some systems add a dedicated \texttt{VECTOR} type with a declared dimension, as in pgvector~\cite{PgvectorRepo}, Snowflake~\cite{SnowflakeVector}, SQL Server~\cite{SQLServer2025Vector}, and MySQL~\cite{MySQLHeatWaveVector}, while others reuse an existing array type, as in DuckDB~\cite{DuckDBVSS}, ClickHouse~\cite{ClickHouseVSS}, BigQuery~\cite{BigQueryVectorSearchFn}, and Databricks~\cite{DatabricksNearestByJoinBlog26}.
 The embeddings in such a column are produced in one of two ways.
@@ -64,13 +64,14 @@ Relational databases add similarity search in three pieces: a vector column type
 With these in place, the optimizer can answer the query above with an index scan, and the search composes with filters and joins like any other SQL\@.
 Stonebraker and Pavlo point to this integration as evidence that similarity search is a feature rather than a new architecture, and predict that relational engines will absorb it~\cite{StonebrakerPavloAround24}.
 A case study of PostgreSQL by Zhang et al.\ concludes that relational databases have no inherent barrier to efficient vector search, and that the remaining performance gap comes from implementation choices~\cite{ZhangPgLimits24}.
-The syntax, however, is not yet standardized: the same search is an \texttt{ORDER BY} with \texttt{LIMIT} in pgvector~\cite{PgvectorRepo} and DuckDB~\cite{DuckDBVSS}, an \texttt{ORDER BY} with \texttt{FETCH APPROX FIRST} in Oracle~\cite{OracleAIVectorSearch}, and a \texttt{VECTOR\_SEARCH} table function in BigQuery~\cite{BigQueryVectorSearchFn} and SQL Server~\cite{SQLServerVectorSearchFn}, though a vector extension is under way for the next SQL standard~\cite{EisentrautSQL202y25}.
+The syntax, however, is not yet standardized, though a vector extension is under way for the next SQL standard~\cite{EisentrautSQL202y25}.
+For example, the search above is an \texttt{ORDER BY} with \texttt{LIMIT} in pgvector~\cite{PgvectorRepo} and DuckDB~\cite{DuckDBVSS}, an \texttt{ORDER BY} with \texttt{FETCH APPROX FIRST} in Oracle~\cite{OracleAIVectorSearch}, and a \texttt{VECTOR\_SEARCH} table function in BigQuery~\cite{BigQueryVectorSearchFn}, SQL Server~\cite{SQLServerVectorSearchFn}, and Databricks~\cite{DatabricksVectorSearchFn26}.
 
 % \yxy{Add a discussion on how vector search is supported in GPU today}
 
 % similarity search on the GPU today
 On the GPU, similarity search comes mainly from libraries.
-Faiss introduced GPU brute-force and IVF search built around a GPU $k$-selection kernel~\cite{JohnsonFaissGPU21}, and NVIDIA cuVS provides brute-force, IVF, and the graph-based CAGRA index~\cite{NvidiaCuVS26, OotomoCAGRA24}, which Faiss has adopted as its GPU backend~\cite{MetaFaissCuVS25}.
+Faiss introduced GPU brute-force and IVF search built around a custom $k$-selection kernel~\cite{JohnsonFaissGPU21}, and NVIDIA cuVS provides brute-force, IVF, and the graph-based CAGRA index~\cite{NvidiaCuVS26, OotomoCAGRA24}, which Faiss has adopted as its GPU backend~\cite{MetaFaissCuVS25}.
 These libraries take a batch of queries per call, because a single query is too little work to saturate the GPU\@.
 Research has extended GPU search to graph indexes~\cite{ZhaoSONG19, GrohGGNN22}, to datasets larger than GPU memory~\cite{KarthikBANG24, ZhangRummy24}, to CPU--GPU cooperation~\cite{TianFusionANNS25}, and to ray-tracing cores~\cite{LiuJuno24}.
 Commercial systems use the GPU mostly to build indexes rather than to search them.
@@ -88,9 +89,9 @@ A similarity join takes two relations of vectors instead of one query vector.
 Given a relation $R$ of probe vectors, a relation $S$ of corpus vectors, and a distance function $d$, it returns the pairs $(r, s) \in R \times S$ that satisfy a similarity condition.
 The condition takes one of three forms, each studied under its own name:
 \begin{itemize}
-    \item \emph{Per-row top-$k$}: for each $r \in R$, the $k$ rows of $S$ nearest to $r$, known as the \emph{kNN join}~\cite{BohmKrebsKNNJoin04}.
-    \item \emph{Global top-$k$}: the $k$ pairs in $R \times S$ with the smallest distance, known as the \emph{$k$ closest pairs} or \emph{distance join}~\cite{HjaltasonSametDistJoin98, CorralClosestPair00}.
-    \item \emph{Threshold}: every pair with $d(r, s) \le \varepsilon$, known as the \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98}.
+    \item \emph{Per-row top-$k$}: for each $r \in R$, the $k$ rows of $S$ nearest to $r$, known as the \emph{kNN join}~\cite{BohmKrebsKNNJoin04}; for example, finding the nearest warehouse to each store.
+    \item \emph{Global top-$k$}: the $k$ pairs in $R \times S$ with the smallest distance, known as the \emph{$k$ closest pairs} or \emph{distance join}~\cite{HjaltasonSametDistJoin98, CorralClosestPair00}; for example, finding the city nearest to any river.
+    \item \emph{Threshold}: every pair with $d(r, s) \le \varepsilon$, known as the \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98}; for example, finding all pairs of similar images~\cite{ShimSimJoin97}.
 \end{itemize}
 
 % \yxy{this section should be much longer. We can provide a simple historical view on how semantic similarity join evolved over the years. It can be something like: (1) early days theoretical work (2) later built into some systems (3) thriving with modern vector data type.}
@@ -107,13 +108,14 @@ The second stage, from the mid-2000s through the 2010s, built similarity joins i
 Chaudhuri et al.\ proposed SSJoin, a set-similarity join operator for data cleaning in a relational engine~\cite{ChaudhuriSSJoin06}, and Silva et al.\ implemented the similarity join as a database operator in PostgreSQL, where it outperformed the same queries written with standard operators~\cite{SilvaSimJoinOp10}.
 As data outgrew a single machine, kNN joins were distributed over MapReduce~\cite{LuKNNMapReduce12} and Spark SQL~\cite{XieSimba16}.
 Separately, the $\varepsilon$-join was ported to the GPU to exploit its parallelism~\cite{LiebermanGPUSimJoin08, GowanlockGPUSelfJoin19}.
-These systems remained research prototypes, and the GPU joins were standalone algorithms rather than operators inside a query engine.
+These systems remained research prototypes, and the GPU $\varepsilon$-joins stayed standalone algorithms.
 
 The third stage, from the 2020s onward, is driven by learned embeddings.
 Workloads such as deduplication, entity resolution, and batch retrieval are similarity joins over embeddings (Section~\ref{subsec:the-transition}), and production SQL engines are beginning to expose the join directly.
 BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~\cite{BigQueryVectorSearchFn}.
-Spark 4.2 adds a \texttt{NEAREST BY} clause for this join and evaluates it over the full cross product of its inputs~\cite{ApacheSparkJIRA56395, SparkNearestByJoin26}.
-Databricks, whose runtime builds on Spark, supports the same clause~\cite{DatabricksNearestBy26} and runs it with a fused operator that scores tiles of probe and corpus vectors with a GEMM kernel, and uses an IVF index for approximate joins~\cite{DatabricksNearestByJoinBlog26}.
+Spark 4.2 adds a \texttt{NEAREST BY} clause for the per-row top-$k$ join and evaluates it over the full cross product of its inputs~\cite{ApacheSparkJIRA56395, SparkNearestByJoin26}.
+Databricks, a commercial platform built on Spark, supports the same clause and runs it with a fused operator that computes distances between tiles of probe and corpus vectors with a GEMM kernel~\cite{DatabricksNearestByJoinBlog26}.
+Its approximate join uses an optional IVF index that is built ahead of time so each probe row compares only against the vectors in its nearest clusters.
 DuckDB offers brute-force join macros (\texttt{vss\_join} and \texttt{vss\_match})~\cite{DuckDBVSS}, an \texttt{HNSW\_INDEX\_JOIN} operator that probes an HNSW index once per probe row~\cite{DuckDBVSSBlog24}, and in a recent pull request, a \texttt{NEAREST BY} clause~\cite{DuckDBNearestByPR24137}.
 Recent algorithmic work targets approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
 To our knowledge, these systems and algorithms run the join on the CPU\@.

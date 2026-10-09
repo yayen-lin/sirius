@@ -8,6 +8,47 @@
 
 \section{Exact Vector Join}\label{sec:technical-1:-exact}
 
+\subsection{Design Overview}\label{subsec:exact-design}
+
+% the grace hash join as the template
+Our design is inspired by the Grace hash join~\cite{KitsuregawaGrace83}.
+The Grace hash join partitions both inputs by the hash of the join key into partitions small enough to fit in memory, and then joins each pair of matching partitions.
+A similarity join can follow the same structure with two changes: how rows are assigned to partitions, and which pairs of partitions are joined.
+In the exact join, there is no key to partition on, because any probe row may match any corpus row. \andy{because exact compare every pair}
+Both inputs are therefore split into partitions that fit in GPU memory, and every pair of partitions is joined; when both inputs fit, there is a single pair.
+Each pair is joined by computing the distances between its rows as a matrix multiplication, followed by a local reduction, and a global reduction merges the local results (Section~\ref{subsec:TODO}).
+The approximate join changes only the partitioning step.
+A hash partition groups rows that share a key, and a k-means cluster groups rows that lie near the same centroid.
+Replacing hash partitioning with k-means clustering turns the same structure into an IVF-style approximate join, in which each probe cluster is joined only with its nearest corpus clusters rather than with every one (Section~\ref{sec:technical-2:-approximate}).
+Databricks arrived at the same structure independently: its approximate plan equi-joins the probe and corpus rows on their centroid identifiers~\cite{DatabricksNearestByJoinBlog26}.
+
+% filter pushdown and reductions
+\andy{maybe instead of introducing this idea, we can explain this in the implementation detail}
+Because the similarity join is a physical operator, it takes its inputs from the rest of the plan and returns a relation that the rest of the plan consumes.
+It therefore receives the optimizations that the engine already applies to every join.
+Filters on either input are pushed below the join, so it compares only the rows that qualify.
+The reduction that follows the join is pushed into it, so only the pairs that survive the reduction are materialized.
+We support three reductions: a per-row top-$k$, which keeps the $k$ nearest corpus rows of each probe row; a global top-$k$, which keeps the $k$ nearest pairs overall; and a threshold, which keeps every pair within a given distance.
+Each reduction runs locally on every pair of partitions and is then merged globally, so the intermediate result never grows to the full set of pairs.
+
+% structures built at query time vs. a persistent index
+\andy{same thing for this, explain this in the implementation detail than introducing this as an idea}
+The approximate join builds its clusters when the query runs, in the same way that a hash join builds its hash table.
+Vector databases and the Databricks approximate join instead rely on a persistent index built ahead of time over a stored
+table~\cite{DatabricksNearestByJoinBlog26}.
+This follows the OLTP pattern from Section~\ref{subsec:the-transition}, in which an index built ahead of time serves lookups over data known in advance.
+In an analytical query, the inputs to a join are often intermediate results, such as the rows that survive a filter or embeddings computed earlier in the same plan, and no index built ahead of time covers them.
+Building the clusters at query time lets the approximate join run on any input the plan produces, and keeps it consistent with the data without a separate index to maintain.
+
+% exact has a limit, and the approximate join raises it
+The exact join compares every pair, so its cost grows with the product of the two input sizes.
+The GPU moves this limit but does not remove it.
+The exact join stays practical at input sizes where a CPU engine does not finish (Section~\ref{sec:evaluation}), but a self-join of a billion-vector dataset would still take days\andy{numbers}.
+Beyond this point the approximate join is needed, and it raises the largest input the engine can join in a given amount of time.
+Because both joins share one structure in the same engine, the choice between them becomes a planning decision based on the cardinality of the inputs rather than a keyword in the query.
+The rest of this section describes the exact join, and Section~\ref{sec:technical-2:-approximate} describes the approximate join.
+
+
 \yxy{
     We need a new diagram illustrating exact join: we join two columns, neither column fits in GPU memory. Then show that both columns are partitioned and we load a pair of partitions at a time and join them. There is per-partition join (using cuVS, GEMM) and there is local reduction followed by a global reduction. (this diagram is not easy to make. Just do you best and we can iterate)}
 
