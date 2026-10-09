@@ -31,9 +31,9 @@ Relational OLAP became the basis of decision support over structured data, and w
 % the use cases in vector join that strengthen the transition and the shortcomings that set up the next subsection
 The workloads for the similarity join already exist under different names.
 In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points, and pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{HuSieveIVF26, AbbasSemDeDup23}.
-In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings, which turns a classically hard matching problem into a simple embedding similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
-In retrieval and recommendation, an entire batch of user or query embeddings is compared against a catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
-More generally, a batched similarity search is already a similarity join, and it is how GPU libraries design their search APIs (Section~\ref{subsec:vector-search}).
+In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings, which reduces a classically hard matching problem to a similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
+In retrieval and recommendation, a batch of user or query embeddings is compared against an item catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
+More generally, a batched similarity search is itself a join, and GPU libraries design their search APIs around it (Section~\ref{subsec:vector-search}).
 However, the two halves are not equally developed.
 The OLTP half is now a standard feature and offered by nearly every major database.
 The OLAP half, in contrast, has reached SQL engines only recently, and to our knowledge it runs on the CPU (Section~\ref{subsec:vector-join}).
@@ -43,6 +43,7 @@ Where an engine has no similarity join, users write it as one search per probe r
 
 % \yxy{The point of this section is to argue a vector join is just another join. But according to S3.3, vector join is already integrated into real systems; so it is a bit awkward to argue for something that is already real. I suggest just expand S3.3 a little bit with the contents where, to argue briefly vector join should be a join operator, and use databricks/DuckDB as evidence.}
 
+% argument 2: similarity join on a GPU engine
 % the three stages, and the industry has completed the first two
 Relational analytics reached its current form in three stages.
 It was first expressed in SQL, then it became physical operators, and finally engines were redesigned around the hardware that runs these operators.
@@ -50,9 +51,9 @@ The similarity join has completed the first two stages.
 BigQuery, DuckDB, Spark, and Databricks already expose it in SQL, and DuckDB and Databricks execute it with dedicated physical operators (Section~\ref{subsec:vector-join}).
 What remains is the third stage, and the analysis behind the Databricks operator indicates where it leads.
 Computing distances one pair at a time reads two values for every multiply-accumulate (MAC), so it is bound by memory bandwidth. \andy{explains MACs = distance computations × d in evaluation}
-Their operator reuses each corpus vector across a tile of probe rows, and by Databricks' roofline estimate it becomes compute-bound once about 64 query vectors are buffered~\cite{DatabricksNearestByJoinBlog26}.
+To make the join compute-bound, the Databricks operator reuses each corpus vector across a tile of probe rows, and their roofline estimate shows that this holds once about 64 query vectors are buffered~\cite{DatabricksNearestByJoinBlog26}.
 Once the join is compute-bound, its speed depends on how much arithmetic the hardware delivers.
-A compute-bound GEMM is the workload the GPU is built for, so we argue that the third stage of the similarity join is a GPU engine.
+A compute-bound GEMM is the workload the GPU is built for, so we argue that the third stage is to run the similarity join as an operator in a GPU-native SQL engine.
 
 % \yxy{this subsection looks AI generated, which is ok for now. I think we don't need very long paragraphs here. Make the points more concise and clear. We can add some simple experiments to make the points very clear. Maybe two figures showing: (1) vector search in CPU vs. GPU (small gain) and (2) vector join in CPU vs. GPU (huge gain).}
 
@@ -60,13 +61,13 @@ A compute-bound GEMM is the workload the GPU is built for, so we argue that the 
 
 % why the GPU is a good fit
 If the similarity join is the analytical half of vector processing, it should run where analytical processing is heading.
-Yogatama et al.\ show that a GPU-native SQL engine outperforms state-of-the-art CPU engines on TPC-H and ClickBench at equal hardware cost~\cite{Yogatama26}.
+Yogatama et al.\ show that a GPU-native SQL engine outperforms state-of-the-art CPU engines on TPC-H and ClickBench, with higher cost efficiency~\cite{Yogatama26, SiriusClickBench25}.
 The similarity join is an especially good fit, because moving from one query vector to many changes the kind of work the hardware does.
 Under the common metrics, distance computation reduces to dot products and vector norms (Section~\ref{subsec:embeddings-and-vectors}).
-For two vectors $r$ and $s$, the inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, r \cdot s$.
+For two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, r \cdot s$.
 If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
 The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so when both sides are large, the work is dominated by a dense matrix multiplication (GEMM).
-A single search ($m = 1$) is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
+A single search ($m=1$) is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
 For a join, $RS^\top$ is a matrix-matrix product in which each corpus vector is reused across many probe rows, so the work becomes compute-bound and runs as GEMM.
 
 % evidence that supports the claim of the gain in vector join vs vector search

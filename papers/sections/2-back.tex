@@ -97,26 +97,27 @@ The condition takes one of three forms, each studied under its own name:
 % \yxy{this section should be much longer. We can provide a simple historical view on how semantic similarity join evolved over the years. It can be something like: (1) early days theoretical work (2) later built into some systems (3) thriving with modern vector data type.}
 
 % historical view
-The similarity join is decades old, and its history falls into three stages distinguished by where the join runs: as a standalone algorithm, as an operator in research systems, and as SQL in production engines.
+The similarity join is decades old, and its history falls into three stages: standalone algorithms, research prototypes, and production SQL engines.
 
 The first stage, from the 1990s to the mid-2000s, defined the problem and its algorithms.
 Similarity joins grew out of spatial joins, which match two sets of objects by location rather than by equal keys~\cite{BrinkhoffSpatialJoin93}, and moved to high dimensions in the late 1990s when data mining and multimedia retrieval began describing objects as feature vectors.
 To avoid comparing every pair, these algorithms partitioned or ordered the space with a multidimensional index~\cite{ShimSimJoin97}, a grid order~\cite{BohmEGO01}, or a grid order over the data's principal components~\cite{XiaGorder04}, so that only pairs in nearby regions were compared.
-This pruning weakens as dimensionality grows, because in high dimensions most pairs are roughly equally far apart~\cite{BeyerNNMeaningful99}; at the hundreds of dimensions of modern embeddings, these methods approach a full pairwise scan.
+This pruning weakens as dimensionality grows, because in high dimensions most pairs are roughly equally far apart~\cite{BeyerNNMeaningful99}; at the hundreds of dimensions of modern embeddings, these methods can approach a full pairwise scan.
 
-The second stage, from the mid-2000s through the 2010s, built similarity joins into systems.
-Chaudhuri et al.\ proposed SSJoin, a set-similarity join operator for data cleaning in a relational engine~\cite{ChaudhuriSSJoin06}, and Silva et al.\ implemented the similarity join as a database operator in PostgreSQL, where it outperformed the same queries written with standard operators~\cite{SilvaSimJoinOp10}.
-As data outgrew a single machine, kNN joins were distributed over MapReduce~\cite{LuKNNMapReduce12} and Spark SQL~\cite{XieSimba16}.
-Separately, the $\varepsilon$-join was ported to the GPU to exploit its parallelism~\cite{LiebermanGPUSimJoin08, GowanlockGPUSelfJoin19}.
-These systems remained research prototypes, and the GPU $\varepsilon$-joins stayed standalone algorithms.
+The second stage, from the mid-2000s through the 2010s, brought similarity joins into database systems and onto parallel hardware.
+Chaudhuri et al.\ proposed SSJoin, a set-similarity join operator for matching strings in data cleaning~\cite{ChaudhuriSSJoin06}; its prefix filtering was later used by Fuzzy Lookup in Microsoft SQL Server's ETL system~\cite{ArasuDataCleaning11}.
+Silva et al.\ added the $\varepsilon$-join and a nearest-neighbor variant to PostgreSQL over one-dimensional numeric attributes, with optimizer rewrite rules~\cite{SilvaSimJoinOp10}.
+On clusters, Lu et al.\ distributed the kNN join over MapReduce for data too large for one machine and evaluated it on up to 10 dimensions~\cite{LuKNNMapReduce12}, and Simba added kNN and distance joins to Spark SQL for spatial data of 2 to 6 dimensions~\cite{XieSimba16}.
+On the GPU, Lieberman et al.\ sorted one input along space-filling curves and searched the curves for each point of the other input~\cite{LiebermanGPUSimJoin08}, and Gowanlock and Karsin computed the $\varepsilon$ self-join over a GPU grid index~\cite{GowanlockGPUSelfJoin19}; both are standalone algorithms rather than operators in a query engine.
+None of this work joins high-dimensional vectors inside a SQL engine, and apart from SSJoin's prefix filtering, we found no evidence that it reached a production engine.
 
 The third stage, from the 2020s onward, is driven by learned embeddings.
 Workloads such as deduplication, entity resolution, and batch retrieval are similarity joins over embeddings (Section~\ref{subsec:the-transition}), and production SQL engines are beginning to expose the join directly.
 BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~\cite{BigQueryVectorSearchFn}.
 Spark 4.2 adds a \texttt{NEAREST BY} clause for the per-row top-$k$ join and evaluates it over the full cross product of its inputs~\cite{ApacheSparkJIRA56395, SparkNearestByJoin26}.
-Databricks, a commercial platform built on Spark, supports the same clause and runs it with a fused operator that computes distances between tiles of probe and corpus vectors with a GEMM kernel~\cite{DatabricksNearestByJoinBlog26}.
-Its approximate join uses an optional IVF index that is built ahead of time so each probe row compares only against the vectors in its nearest clusters.
-DuckDB offers brute-force join macros (\texttt{vss\_join} and \texttt{vss\_match})~\cite{DuckDBVSS}, an \texttt{HNSW\_INDEX\_JOIN} operator that probes an HNSW index once per probe row~\cite{DuckDBVSSBlog24}, and in a recent pull request, a \texttt{NEAREST BY} clause~\cite{DuckDBNearestByPR24137}.
+Databricks, a commercial platform built on Spark, supports the same clause and runs it with a fused operator that computes distances with a custom GEMM kernel~\cite{DatabricksNearestByJoinBlog26}.
+Its approximate join uses an optional IVF index that is built ahead of time so each probe row searches only its nearest clusters.
+DuckDB offers brute-force join macros (\texttt{vss\_join} and \texttt{vss\_match})~\cite{DuckDBVSS}, an \texttt{HNSW\_INDEX\_JOIN} operator that uses an HNSW index on the corpus table in place of a cross product~\cite{DuckDBVSSBlog24}, and recently a \texttt{NEAREST BY} clause~\cite{DuckDBNearestByPR24137}.
 Recent algorithmic work targets approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
-To our knowledge, these systems and algorithms run the join on the CPU\@.
+To our knowledge, these engines and recent algorithms execute the join on the CPU\@.
 The rest of this paper shows why and how to run the join on the GPU as an operator inside a SQL engine.
