@@ -62,12 +62,12 @@ A compute-bound GEMM is the workload the GPU is built for, so we argue that the 
 If the similarity join is the analytical half of vector processing, it should run where analytical processing is heading.
 Yogatama et al.\ show that a GPU-native SQL engine outperforms state-of-the-art CPU engines on TPC-H and ClickBench at equal hardware cost~\cite{Yogatama26}.
 The similarity join is an especially good fit, because moving from one query vector to many changes the kind of work the hardware does.
-Under the common metrics, distance computation reduces to dot products (Section~\ref{subsec:embeddings-and-vectors}).
-For two vectors $r$ and $s$, the inner product is the dot product $r \cdot s$ itself, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, r \cdot s$.\andy{review this explanation on why it's a GEMM, or matrix multiplication}
-If one set of $m$ vectors is stacked as the rows of an $m \times d$ matrix $R$ and another set of $n$ vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
-The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$, so comparing many vectors against many others is dominated by a dense matrix multiplication (GEMM).
-A single search is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
-A join is a matrix-matrix product, in which each corpus vector is reused across many probe rows, so the work becomes compute-bound and runs as GEMM.
+Under the common metrics, distance computation reduces to dot products and vector norms (Section~\ref{subsec:embeddings-and-vectors}).
+For two vectors $r$ and $s$, the inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, r \cdot s$.
+If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
+The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so when both sides are large, the work is dominated by a dense matrix multiplication (GEMM).
+A single search ($m = 1$) is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
+For a join, $RS^\top$ is a matrix-matrix product in which each corpus vector is reused across many probe rows, so the work becomes compute-bound and runs as GEMM.
 
 % evidence that supports the claim of the gain in vector join vs vector search
 Our measurements in the exact setting show that the GPU's advantage grows as the work moves from a matrix-vector product to a matrix-matrix product (Figure~\ref{fig:TODO}).

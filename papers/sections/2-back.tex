@@ -86,12 +86,12 @@ When the query side is instead a relation, whether stored or produced by other o
 
 % what a vector/semantic/similarity join is & its three forms
 A similarity join takes two relations of vectors instead of one query vector.
-Given a relation $R$ of probe vectors, a relation $S$ of corpus vectors, and a distance function $d$, it returns the pairs $(r, s) \in R \times S$ that satisfy a similarity condition.
+Given a relation $R$ of $m$ probe vectors, a relation $S$ of $n$ corpus vectors, each of dimension $d$, and a distance function $\delta$, it returns the pairs $(r, s) \in R \times S$ that satisfy a similarity condition.
 The condition takes one of three forms, each studied under its own name:
 \begin{itemize}
     \item \emph{Per-row top-$k$}: for each $r \in R$, the $k$ rows of $S$ nearest to $r$, known as the \emph{kNN join}~\cite{BohmKrebsKNNJoin04}; for example, finding the nearest warehouse to each store.
     \item \emph{Global top-$k$}: the $k$ pairs in $R \times S$ with the smallest distance, known as the \emph{$k$ closest pairs} or \emph{distance join}~\cite{HjaltasonSametDistJoin98, CorralClosestPair00}; for example, finding the city nearest to any river.
-    \item \emph{Threshold}: every pair with $d(r, s) \le \varepsilon$, known as the \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98}; for example, finding all pairs of similar images~\cite{ShimSimJoin97}.
+    \item \emph{Threshold}: every pair with $\delta(r, s) \le \varepsilon$, known as the \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98}; for example, finding all pairs of similar images~\cite{ShimSimJoin97}.
 \end{itemize}
 
 % \yxy{this section should be much longer. We can provide a simple historical view on how semantic similarity join evolved over the years. It can be something like: (1) early days theoretical work (2) later built into some systems (3) thriving with modern vector data type.}
