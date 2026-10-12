@@ -53,7 +53,7 @@ What remains is the third stage, and the analysis behind the Databricks operator
 Computing distances one pair at a time reads two values for every multiply-accumulate (MAC), so it is bound by memory bandwidth. \andy{explains MACs = distance computations × d in evaluation}
 To make the join compute-bound, the Databricks operator reuses each corpus vector across a tile of probe rows, and their roofline estimate shows that this holds once about 64 query vectors are buffered~\cite{DatabricksNearestByJoinBlog26}.
 Once the join is compute-bound, its speed depends on how much arithmetic the hardware delivers.
-A compute-bound GEMM is the workload the GPU is built for, so we argue that the third stage is to run the similarity join as an operator in a GPU-native SQL engine.
+We argue that the third stage is to run the similarity join as an operator in a GPU-native SQL engine.
 
 % \yxy{this subsection looks AI generated, which is ok for now. I think we don't need very long paragraphs here. Make the points more concise and clear. We can add some simple experiments to make the points very clear. Maybe two figures showing: (1) vector search in CPU vs. GPU (small gain) and (2) vector join in CPU vs. GPU (huge gain).}
 
@@ -61,6 +61,7 @@ A compute-bound GEMM is the workload the GPU is built for, so we argue that the 
 
 % why the GPU is a good fit
 If the similarity join is the analytical half of vector processing, it should run where analytical processing is heading.
+Analytical queries scan large inputs and are typically bound by memory bandwidth, and a GPU offers several times the memory bandwidth of a CPU\@.
 Yogatama et al.\ show that a GPU-native SQL engine outperforms state-of-the-art CPU engines on TPC-H and ClickBench, with higher cost efficiency~\cite{Yogatama26, SiriusClickBench25}.
 The similarity join is an especially good fit, because moving from one query vector to many changes the kind of work the hardware does.
 Under the common metrics, distance computation reduces to dot products and vector norms (Section~\ref{subsec:embeddings-and-vectors}).
