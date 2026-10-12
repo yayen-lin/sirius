@@ -1,37 +1,54 @@
+%\yxy{add more details to the figure to make it more interesting, like example systems (only the most important ones)}}
 \begin{figure}
   \centering
   \begin{tikzpicture}[
       font=\small\sffamily,
-      cell/.style={draw, rounded corners=2pt, minimum width=3.4cm,
-                   minimum height=1.6cm, align=center},
+      cell/.style={draw, rounded corners=2pt, minimum width=2.5cm,
+                   minimum height=1.4cm, align=center,
+                   font=\small\sffamily\bfseries},
       open/.style={cell, dashed, line width=0.9pt, fill=black!8},
-      ax/.style={font=\small\sffamily\bfseries},
+      ax/.style={font=\small\sffamily\bfseries, align=center},
       flow/.style={-{Latex[length=2.2mm]}, thick, black!65},
     ]
 
-    % four quadrants
-    \node[cell] (a) at (0,0)      {70s - 80s};
-    \node[cell] (b) at (3.8,0)    {2000s};
-    \node[cell] (c) at (0,-2.2)   {now};
-    \node[open] (d) at (3.8,-2.2) {vector join};
+    % columns: relational, vector; rows: OLTP, CPU OLAP, GPU OLAP
+    \node[cell] (r1) at (0,0)      {70s--80s\\[2pt]
+      {\scriptsize\mdseries Oracle, PostgreSQL,}\\
+      {\scriptsize\mdseries MySQL, SQL Server}};
+    \node[cell] (r2) at (0,-1.9)   {$\sim$mid-1990s\\[2pt]
+      {\scriptsize\mdseries Snowflake, BigQuery,}\\
+      {\scriptsize\mdseries Redshift, Databricks,}\\
+      {\scriptsize\mdseries DuckDB}};
+    \node[cell] (r3) at (0,-3.8)   {2010s\\[2pt]
+      {\scriptsize\mdseries Sirius, Theseus,}\\
+      {\scriptsize\mdseries HeavyDB, Kinetica}};
+    \node[cell] (v1) at (2.9,0)    {2020s\\[2pt]
+      {\scriptsize\mdseries Milvus, Pinecone,}\\
+      {\scriptsize\mdseries pgvector, Oracle}};
+    \node[cell] (v2) at (2.9,-1.9) {2024\\[2pt]
+      {\scriptsize\mdseries Databricks, Spark,}\\
+      {\scriptsize\mdseries DuckDB}};
+    \node[open] (v3) at (2.9,-3.8) {this work\\[2pt]
+      {\scriptsize\mdseries Sirius}};
 
     % arrows
-    \draw[flow] (a) -- (b);
-    \draw[flow] (c) -- (d);
-    \draw[flow] (a) -- (c);
+    \draw[flow] (r1) -- (r2);
+    \draw[flow] (r2) -- (r3);
+    \draw[flow] (v1) -- (v2);
+    \draw[flow] (v2) -- (v3);
+    \draw[flow] (r1) -- (v1);
 
     % column axis (x)
-    \node[ax, anchor=south] at ([yshift=3pt]a.north) {OLTP};
-    \node[ax, anchor=south] at ([yshift=3pt]b.north) {OLAP};
+    \node[ax, anchor=south] at ([yshift=3pt]r1.north) {relational};
+    \node[ax, anchor=south] at ([yshift=3pt]v1.north) {vector};
 
     % row axis (y)
-    \node[ax, rotate=90, anchor=south] at ([xshift=-3pt]a.west) {relational};
-    \node[ax, rotate=90, anchor=south] at ([xshift=-3pt]c.west) {vector};
+    \node[ax, anchor=east] at ([xshift=-3pt]r1.west) {OLTP};
+    \node[ax, anchor=east] at ([xshift=-3pt]r2.west) {CPU\\OLAP};
+    \node[ax, anchor=east] at ([xshift=-3pt]r3.west) {GPU\\OLAP};
   \end{tikzpicture}
-  \caption{Relational data moved from transactional processing (OLTP,
-    70s--80s) to analytical processing (OLAP, 2000s). Vector data is at
-    the same inflection point: vector search answers one query at a time
-    (OLTP, now), while the analytical quadrant, the vector join, is
-    largely unexplored.}
+  \caption{
+    Each cell shows when the transition began and its most representative systems (not necessarily from that period). Relational data moved from transactional processing (70s--80s) to analytical processing on CPUs ($\sim$mid-1990s)~\cite{StonebrakerPavloAround24}, and then to GPUs (2010s)~\cite{AramburuTheseus25, HeavyDB, Kinetica, Yogatama26}. Vector data is following the same path: vector search answers one query at a time (2020s)~\cite{StonebrakerPavloAround24, WangMilvus21}, and the vector join reached CPU engines in 2024~\cite{DuckDBVSSBlog24} and is now a SQL clause in several~\cite{DatabricksNearestByJoinBlog26, DuckDBNearestByPR24137, SparkNearestByJoin26}. The vector join on the GPU is the open cell that this work fills.
+  }
   \label{fig:quadrant}
 \end{figure}
