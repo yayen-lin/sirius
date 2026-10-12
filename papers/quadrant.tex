@@ -15,29 +15,29 @@
         \node[cell] (r1) at (0,0)      {70s--80s\\[2pt] {\scriptsize\mdseries Oracle, PostgreSQL,}\\ {\scriptsize\mdseries MySQL, SQL Server}};
         \node[cell] (r2) at (0,-2.5)   {$\sim$mid-1990s\\[2pt] {\scriptsize\mdseries Snowflake, BigQuery,}\\ {\scriptsize\mdseries Databricks, DuckDB}};
         \node[cell] (r3) at (0,-5.0)   {2010s\\[2pt] {\scriptsize\mdseries Sirius, Theseus,}\\ {\scriptsize\mdseries HeavyDB, Kinetica}};
-        \node[cell] (v1) at (4.3,0)    {late 2010s\\[2pt] {\scriptsize\mdseries Milvus, Pinecone,}\\ {\scriptsize\mdseries pgvector, Oracle}};
-        \node[cell] (v2) at (4.3,-2.5) {2024\\[2pt] {\scriptsize\mdseries Databricks, Spark,}\\ {\scriptsize\mdseries DuckDB}};
-        \node[open] (v3) at (4.3,-5.0) {this work\\[2pt] {\scriptsize\mdseries Sirius}};
+        \node[cell] (v1) at (4.5,0)    {late 2010s\\[2pt] {\scriptsize\mdseries Milvus, Pinecone,}\\ {\scriptsize\mdseries pgvector, Oracle}};
+        \node[cell] (v2) at (4.5,-2.5) {2024\\[2pt] {\scriptsize\mdseries Databricks, Spark,}\\ {\scriptsize\mdseries BigQuery, DuckDB}};
+        \node[open] (v3) at (4.5,-5.0) {this work\\[2pt] {\scriptsize\mdseries Sirius}};
 
         % arrows
-        \draw[flow] (r1) -- node[fill=white, inner sep=1pt, font=\scriptsize\mdseries, align=center] {data warehousing,\\column stores} (r2);
-        \draw[flow] (r2) -- node[fill=white, inner sep=1pt, font=\scriptsize\mdseries, align=center] {memory bandwidth,\\cost efficiency} (r3);
-        \draw[flow] (v1) -- node[fill=white, inner sep=1pt, font=\scriptsize\mdseries] {batch ML workloads} (v2);
-        \draw[flow] (v2) -- node[fill=white, inner sep=1pt, font=\scriptsize\mdseries] {compute throughput} (v3);
-        \draw[flow] (r1) -- node[above, font=\scriptsize\mdseries, align=center] {embedding\\models} (v1);
-        \draw[flow] (r3) -- node[above, font=\scriptsize\mdseries, align=center] {columnar\\embeddings} (v3);
+        \draw[flow] (r1) -- node[fill=white, inner sep=1pt, font=\scriptsize\sffamily\mdseries, align=center] {data warehousing,\\column stores} (r2);
+        \draw[flow] (r2) -- node[fill=white, inner sep=1pt, font=\scriptsize\sffamily\mdseries, align=center] {memory bandwidth,\\cost efficiency} (r3);
+        \draw[flow] (v1) -- node[fill=white, inner sep=1pt, font=\scriptsize\sffamily\mdseries] {batch ML workloads} (v2);
+        \draw[flow] (v2) -- node[fill=white, inner sep=1pt, font=\scriptsize\sffamily\mdseries] {compute throughput} (v3);
+        \draw[flow] (r1) -- node[above, font=\scriptsize\sffamily\mdseries, align=center] {embedding\\models} (v1);
+        \draw[flow] (r3) -- node[above, font=\scriptsize\sffamily\mdseries, align=center] {embeddings in\\the warehouse} (v3);
 
         % column axis (x)
-        \node[ax, anchor=south] at ([yshift=3pt]r1.north) {relational};
-        \node[ax, anchor=south] at ([yshift=3pt]v1.north) {vector};
+        \node[ax, anchor=south] at ([yshift=3pt]r1.north) {Relational};
+        \node[ax, anchor=south] at ([yshift=3pt]v1.north) {Vector};
 
         % row axis (y)
-        \node[ax, anchor=east] at ([xshift=-3pt]r1.west) {OLTP};
-        \node[ax, anchor=east] at ([xshift=-3pt]r2.west) {CPU\\OLAP};
-        \node[ax, anchor=east] at ([xshift=-3pt]r3.west) {GPU\\OLAP};
+        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r1.west) {OLTP};
+        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r2.west) {CPU\\OLAP};
+        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r3.west) {GPU\\OLAP};
     \end{tikzpicture}
     \caption{
-        Each cell shows when the transition began and its most representative systems (not necessarily from that period). Relational data moved from transactional processing (70s--80s) to analytical processing on CPUs ($\sim$mid-1990s)~\cite{StonebrakerPavloAround24}, and then to GPUs (2010s)~\cite{AramburuTheseus25, HeavyDB, Kinetica, Yogatama26}. Vector data is following the same path: vector search answers one query at a time (late 2010s)~\cite{StonebrakerPavloAround24, WangMilvus21}, and the vector join reached CPU engines in 2024~\cite{DuckDBVSSBlog24} and is now a SQL clause in several~\cite{DatabricksNearestByJoinBlog26, DuckDBNearestByPR24137, SparkNearestByJoin26}. The vector join on the GPU is the open cell that this work fills.
+        Each cell shows when the transition began and its most representative systems (not necessarily from that period). Arrow labels name what drove each transition. Relational data moved from transactional processing (70s--80s) to analytical processing on CPUs ($\sim$mid-1990s)~\cite{StonebrakerPavloAround24}, and then to GPUs (2010s)~\cite{AramburuTheseus25, HeavyDB, Kinetica, Yogatama26}. Vector data is following the same path: vector search answers one query at a time (late 2010s)~\cite{StonebrakerPavloAround24, WangMilvus21}, and the vector join reached CPU engines in 2024~\cite{DuckDBVSSBlog24} and is now a SQL clause in several~\cite{DatabricksNearestByJoinBlog26, DuckDBNearestByPR24137, SparkNearestByJoin26}. The vector join on the GPU is the open cell that this work fills.
     }
     \label{fig:quadrant}
 \end{figure}
