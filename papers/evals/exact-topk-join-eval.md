@@ -1,16 +1,21 @@
 ## scaling curve:
-1. Sirius, against duckdb bruteforce, against duckdb plain hnsw, against duckdb's hnsw accelerated index, against cuvs, against FAISS
-   a. with growing k (see the GEMM kicks in at k>64 for sirius)
-   b. with growing corpus size
-   c. with growing probe size
+
+Sirius, against duckdb bruteforce, against duckdb plain hnsw, against duckdb's hnsw accelerated index, against cuvs, against FAISS
+a. with growing k (see the GEMM kicks in at k>64 for sirius)
+b. with growing corpus size
+c. with growing probe size
 
 ## Need fix:
-- Per-row: the planner already has output_cols, so it only needs to pass it down. The partial and the left part would then carry only the needed right and left columns.
-- Global: work out the needed columns from the projections above the join.
-- Threshold: DuckDB gives no projection map, so we would have to compute one from whatever sits above the join.
 
+- (fixed) Per-row: the planner already has output_cols, so it only needs to pass it down. The partial and the left part would then carry only the needed right and left columns.
+- (fixed) Global: work out the needed columns from the projections above the join.
+- (not fixed) Threshold: DuckDB returns a LogicalAnyJoin which gives no projection map, so we would have to compute one from whatever sits above the join.
 
-i'm looking at the evaluation result of my exact vector join work for scaling curve 5 (# per-row: varying k) and 6 (# per-row: varying corpus size)
+## Note about cuvs top-k selection
+
+- k <= 64: If the metric is an L2 variant and both inputs are row-major, it runs fusedL2Knn.
+- k > 64, or any non-L2 metric: it falls to tiled_brute_force_knn, which does a GEMM-based distance tile followed by cuvs::selection::select_k (a warp-sort kernel).
+- k > 256: it switches to radix select, which runs an extra sort because radix select doesn't return results in order
 
 ```bash
 # per-row: varying k
@@ -21,10 +26,10 @@ cuvs              8   10       80000   128       10000     10000000       1e+11 
 cuvs             16   10      160000   128       10000     10000000       1e+11    1.28e+13      7514.8      7739.5      7895.1    0.0000000006                  1653.86
 cuvs             32   10      320000   128       10000     10000000       1e+11    1.28e+13      7438.4      7728.0      7896.7    0.0000000006                  1656.32
 cuvs             64   10      640000   128       10000     10000000       1e+11    1.28e+13      7844.5      8079.3      8248.1    0.0000000006                  1584.29
-cuvs             65   10      650000   128       10000     10000000       1e+11    1.28e+13      4544.8      4584.7      4638.9    0.0000000004                  2791.87
+cuvs             65   10      650000   128       10000     10000000       1e+11    1.28e+13      4544.8      4584.7      4638.9    0.0000000004                  2791.87  # -> GEMM kicks in
 cuvs            128   10     1280000   128       10000     10000000       1e+11    1.28e+13      4565.6      4611.9      4653.5    0.0000000004                  2775.42
 cuvs            256   10     2560000   128       10000     10000000       1e+11    1.28e+13      4876.6      4919.3      4965.3    0.0000000004                  2601.98
-cuvs            512   10     5120000   128       10000     10000000       1e+11    1.28e+13     27690.6     27996.1     28047.7    0.0000000022                   457.21
+cuvs            512   10     5120000   128       10000     10000000       1e+11    1.28e+13     27690.6     27996.1     28047.7    0.0000000022                   457.21 # -> switch to radix select
 cuvs           1024   10    10240000   128       10000     10000000       1e+11    1.28e+13     27984.8     28280.9     28352.0    0.0000000022                   452.60
 duckdb-bf         2   10       20000   128       10000     10000000       1e+11    1.28e+13    461281.0    465041.1    467860.0    0.0000000363                    27.52
 duckdb-bf         4   10       40000   128       10000     10000000       1e+11    1.28e+13    461301.0    464611.8    466593.0    0.0000000363                    27.55
@@ -65,10 +70,10 @@ sirius            8   10       80000   128       10000     10000000       1e+11 
 sirius           16   10      160000   128       10000     10000000       1e+11    1.28e+13      8181.0      8233.6      8277.0    0.0000000006                  1554.61
 sirius           32   10      320000   128       10000     10000000       1e+11    1.28e+13      8118.0      8166.0      8223.0    0.0000000006                  1567.47
 sirius           64   10      640000   128       10000     10000000       1e+11    1.28e+13      8752.0      8808.1      8832.0    0.0000000007                  1453.21
-sirius           65   10      650000   128       10000     10000000       1e+11    1.28e+13      5239.0      5251.2      5263.0    0.0000000004                  2437.54
+sirius           65   10      650000   128       10000     10000000       1e+11    1.28e+13      5239.0      5251.2      5263.0    0.0000000004                  2437.54  # -> GEMM kicks in
 sirius          128   10     1280000   128       10000     10000000       1e+11    1.28e+13      5255.0      5275.7      5287.0    0.0000000004                  2426.22
 sirius          256   10     2560000   128       10000     10000000       1e+11    1.28e+13      5572.0      5598.2      5623.0    0.0000000004                  2286.45
-sirius          512   10     5120000   128       10000     10000000       1e+11    1.28e+13     37388.0     37610.9     37689.0    0.0000000029                   340.33
+sirius          512   10     5120000   128       10000     10000000       1e+11    1.28e+13     37388.0     37610.9     37689.0    0.0000000029                   340.33 # -> switch to radix select
 sirius         1024   10    10240000   128       10000     10000000       1e+11    1.28e+13     37672.0     37835.0     38023.0    0.0000000030                   338.31
 
 # per-row: varying corpus size
@@ -90,7 +95,7 @@ duckdb-ialj     10k   10      100000   128       10000        10000           - 
 duckdb-ialj    100k   10      100000   128       10000       100000           -           -      3109.0      3213.9      3591.0               -                        -
 duckdb-ialj      1m   10      100000   128       10000      1000000           -           -      5028.0      5337.9      6534.0               -                        -
 duckdb-ialj     10m   10      100000   128       10000     10000000           -           -      9614.0      9841.1     10045.0               -                        -
-duckdb-ialj    100m   10     SKIPPED   128       10000    100000000           -           -     SKIPPED     SKIPPED     SKIPPED               -                        -
+duckdb-ialj    100m   10         OOM   128       10000    100000000           -           -         OOM         OOM         OOM               -                        -
 faiss            1k   10      100000   128       10000         1000       1e+07    1.28e+09         2.7         2.9         4.0    0.0000000022                   444.95
 faiss           10k   10      100000   128       10000        10000       1e+08    1.28e+10         4.9         5.1         6.2    0.0000000004                  2530.79
 faiss          100k   10      100000   128       10000       100000       1e+09    1.28e+11        30.6        31.4        32.9    0.0000000002                  4079.84
@@ -104,6 +109,22 @@ sirius           1m   10      100000   128       10000      1000000       1e+10 
 sirius          10m   10      100000   128       10000     10000000       1e+11    1.28e+13      7672.0      7865.5      8008.0    0.0000000006                  1627.36
 sirius         100m   10      100000   128       10000    100000000       1e+12    1.28e+14     90447.0     91470.9     92174.0    0.0000000007                  1399.35
 
-
-
+# per-row: growing probe size
+engine        probe reps        rows   dim  probe_rows  corpus_rows       pairs    dist_ops      min_ms     mean_ms      max_ms       ms_per_op billion_dist_ops_per_sec
+duckdb            1   10          10   128           1     10000000       1e+07    1.28e+09       172.0       181.4       192.0    0.0000001417                     7.06
+duckdb           10   10         100   128          10     10000000       1e+08    1.28e+10       652.0       689.6       746.0    0.0000000539                    18.56
+duckdb          100   10        1000   128         100     10000000       1e+09    1.28e+11      5178.0      5305.9      5490.0    0.0000000415                    24.12
+duckdb           1k   10       10000   128        1000     10000000       1e+10    1.28e+12     50321.0     50632.6     51427.0    0.0000000396                    25.28
+duckdb          10k   10      100000   128       10000     10000000       1e+11    1.28e+13    502881.0    504196.2    510136.0    0.0000000394                    25.39
+duckdb         100k   10         OOM   128      100000     10000000       1e+12    1.28e+14         OOM         OOM         OOM               -                        -
+duckdb           1m   10         OOM   128     1000000     10000000       1e+13    1.28e+15         OOM         OOM         OOM               -                        -
+duckdb          10m   10         OOM   128    10000000     10000000       1e+14    1.28e+16         OOM         OOM         OOM               -                        -
+sirius            1   10          10   128           1     10000000       1e+07    1.28e+09       401.0       414.3       465.0    0.0000003237                     3.09
+sirius           10   10         100   128          10     10000000       1e+08    1.28e+10       517.0       540.4       557.0    0.0000000422                    23.69
+sirius          100   10        1000   128         100     10000000       1e+09    1.28e+11       557.0       606.7       627.0    0.0000000047                   210.98
+sirius           1k   10       10000   128        1000     10000000       1e+10    1.28e+12      1249.0      1271.0      1319.0    0.0000000010                  1007.08
+sirius          10k   10      100000   128       10000     10000000       1e+11    1.28e+13      7615.0      7787.1      7933.0    0.0000000006                  1643.74
+sirius         100k   10     1000000   128      100000     10000000       1e+12    1.28e+14     75584.0     78136.2     78718.0    0.0000000006                  1638.17
+sirius           1m   10    10000000   128     1000000     10000000       1e+13    1.28e+15    784690.0    787202.8    789458.0    0.0000000006                  1626.01
+sirius          10m    4   100000000   128    10000000     10000000       1e+14    1.28e+16   7836889.0   7868408.0   7912354.0    0.0000000006                  1626.76
 ```
