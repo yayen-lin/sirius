@@ -37,7 +37,7 @@
         \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r3.west) {GPU\\OLAP};
     \end{tikzpicture}
     \caption{
-        Each cell shows when the transition began and its most representative systems (not necessarily from that period). Arrow labels name what drove each transition. Relational data moved from transactional processing (70s--80s) to analytical processing on CPUs ($\sim$mid-1990s)~\cite{StonebrakerPavloAround24}, and then to GPUs (2010s)~\cite{AramburuTheseus25, HeavyDB, Kinetica, Yogatama26}. Vector data is following the same path: vector search answers one query at a time (late 2010s)~\cite{StonebrakerPavloAround24, WangMilvus21}, and the vector join reached CPU engines in 2024~\cite{DuckDBVSSBlog24} and is now a SQL clause in several~\cite{DatabricksNearestByJoinBlog26, DuckDBNearestByPR24137, SparkNearestByJoin26}. The vector join on the GPU is the open cell that this work fills.
+        Each cell shows when the transition began and its representative systems (not necessarily from that period), and arrows label what drove it. Relational data moved from transactional to analytical processing on CPUs~\cite{StonebrakerPavloAround24}, then to GPUs~\cite{AramburuTheseus25, HeavyDB, Kinetica, Yogatama26}. Vector data is following the same path: vector search serves point queries~\cite{StonebrakerPavloAround24, WangMilvus21}, and the vector join is now a SQL clause in several CPU engines~\cite{DuckDBVSSBlog24, DatabricksNearestByJoinBlog26, DuckDBNearestByPR24137, SparkNearestByJoin26}. The vector join on the GPU is the open cell that this work fills.
     }
     \label{fig:quadrant}
 \end{figure}
