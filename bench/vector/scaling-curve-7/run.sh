@@ -7,7 +7,7 @@ set -euo pipefail
 REPS=10
 K=10
 TIMEOUT=3600
-SIRIUS_TIMEOUT=7200
+SIRIUS_TIMEOUT=10800
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CLI="$REPO/build/release/duckdb"
 SRC="$REPO/bench/vector/data/bigann10m_sliced.duckdb"
@@ -76,7 +76,7 @@ watchdog() {
 BUF="$(mktemp)"
 trap 'rm -f "$BUF"' EXIT
 
-# Emit a placeholder when an engine times out
+# Emit a placeholder when an engine times out or runs out of memory
 emit_row() {
   echo "$1 $LABEL: $2" >&2
   printf "%-8s %10s %4d %11s %5s %11s %12s %11g %11g %11s %11s %11s %15s %24s\n" \
