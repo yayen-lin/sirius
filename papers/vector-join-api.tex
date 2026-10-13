@@ -1,109 +1,105 @@
-% TVF vs native SQL for the three vector join modes
-\begin{table*}[t]
-\centering
-\definecolor{vjperrow}{HTML}{2563EB}
-\definecolor{vjglobal}{HTML}{EA580C}
-\definecolor{vjthresh}{HTML}{16A34A}
-\definecolor{vjkw}{HTML}{7C3AED}
-\definecolor{vjfn}{HTML}{DB2777}
-\definecolor{vjstr}{HTML}{0F766E}
-\definecolor{vjarg}{HTML}{64748B}
-\colorlet{vjmode}{black}
+% TVF signature, then TVF vs native SQL for the three vector join modes
+\begin{table}[t]
+    \centering
+    \definecolor{vjperrow}{HTML}{2563EB}
+    \definecolor{vjglobal}{HTML}{EA580C}
+    \definecolor{vjthresh}{HTML}{16A34A}
+    \definecolor{vjkw}{HTML}{7C3AED}
+    \definecolor{vjfn}{HTML}{DB2777}
+    \definecolor{vjstr}{HTML}{0F766E}
+    \definecolor{vjarg}{HTML}{64748B}
+    \definecolor{vjcom}{HTML}{94A3B8}
+    \colorlet{vjmode}{black}
 % text between @...@ marks the clause that selects the join mode
-\lstdefinestyle{vj}{
-  language=SQL, basicstyle=\ttfamily\footnotesize,
-  columns=fullflexible, keepspaces=true, showstringspaces=false,
-  frame=none, aboveskip=0pt, belowskip=0pt,
-  morekeywords={LATERAL,LIMIT},
-  keywordstyle=\color{vjkw}\bfseries,
-  emph={sirius_knn_join,array_distance,array_cosine_distance},
-  emphstyle=\color{vjfn},
-  emph={[2]metric},
-  emphstyle={[2]\color{vjarg}},
-  stringstyle=\color{vjstr},
-  moredelim=[is][\color{vjmode}\bfseries]{@}{@}}
-\tcbset{vjcard/.style={
-  sidebyside, sidebyside align=top, lefthand ratio=0.5, sidebyside gap=6mm,
-  arc=1.5mm, boxrule=0.6pt, left=2mm, right=2mm, top=1.2mm, bottom=1.2mm,
-  toptitle=0.6mm, bottomtitle=0.6mm, fonttitle=\small\sffamily,
-  before skip=1.2mm, after skip=1.2mm,
-  colframe=vjmode, colback=vjmode!4, colbacktitle=vjmode!14,
-  coltitle=vjmode!65!black}}
-\caption{
-  The three vector join modes in Sirius, written with the table function (left) and as native SQL that Sirius recognizes in DuckDB's query plan (right).
-  Highlighted clauses select the mode.
-  All examples use L2 distance.
-}
-\label{tab:vector-join-api}
+    \lstdefinestyle{vj}{
+        language=SQL, basicstyle=\ttfamily\scriptsize,
+        columns=fullflexible, keepspaces=true, showstringspaces=false,
+        frame=none, aboveskip=0pt, belowskip=0pt,
+        morekeywords={LATERAL,LIMIT},
+        keywordstyle=\color{vjkw}\bfseries,
+        emph={sirius\_knn\_join,array\_distance,array\_cosine\_distance},
+        emphstyle=\color{vjfn},
+        emph={[2]join\_mode,k,eps,metric,search\_mode,output\_type,left\_output\_columns,right\_output\_columns},
+        emphstyle={[2]\color{vjarg}},
+        stringstyle=\color{vjstr},
+        commentstyle=\color{vjcom},
+        moredelim=[is][\color{vjmode}\bfseries]{@}{@}}
+    \tcbset{vjcard/.style={
+        arc=1.2mm, boxrule=0.6pt, left=1.5mm, right=1.5mm, top=1mm, bottom=1mm, middle=1mm,
+        toptitle=0.4mm, bottomtitle=0.4mm, fonttitle=\footnotesize\sffamily\bfseries,
+        before skip=1mm, after skip=1mm,
+        colframe=vjmode, colback=vjmode!4, colbacktitle=vjmode!14,
+        coltitle=vjmode!65!black}}
+    \caption{
+        The Sirius vector join API: the table function (top), and each join mode written with the table function (upper half) and as native SQL (lower half).
+        Highlighted parts select the mode.
+    }
+    \label{tab:vector-join-api}
 
-\noindent
-\begin{minipage}{0.5\textwidth}\centering\sffamily\bfseries Table function\end{minipage}%
-\begin{minipage}{0.5\textwidth}\centering\sffamily\bfseries Native SQL\end{minipage}
+% ---- signature ----
+    \colorlet{vjmode}{black!60}
+    \begin{tcolorbox}[vjcard, title={Table function}]
+        \begin{lstlisting}[style=vj,label={lst:table-function}]
+sirius_knn_join(
+  left_table,    -- probe table R
+  left_column,   -- vector column of left table
+  right_table,   -- corpus table S
+  right_column,  -- vector column of right table
+  k =>,          -- result size for top-k
+  eps =>,        -- distance bound for threshold
+  metric => ['l2' | 'cosine'],
+  join_mode => ['global' | 'per-row' | 'threshold'],
+  output_type => ['similarity' | 'distance'],
+  search_mode => ['approx' | 'exact' | 'exact-gemm'],
+  left_output_columns =>,  -- default to pk/id (fast path)
+  right_output_columns =>  -- default to pk/id (fast path)
+)
+        \end{lstlisting}
+    \end{tcolorbox}
 
 % ---- per-row top-k ----
-\colorlet{vjmode}{vjperrow}
-\begin{tcolorbox}[vjcard, title={\bfseries Per-row top-$k$\hfill\itshape\mdseries for each row of $R$, its $k$ nearest rows of $S$}]
-\begin{lstlisting}[style=vj]
-SELECT * FROM sirius_knn_join(
-  'R', 'emb', 'S', 'emb',
-  @join_mode => 'per-row', k => 5@,
-  metric => 'l2');
-\end{lstlisting}
-\tcblower
-\begin{lstlisting}[style=vj]
+    \colorlet{vjmode}{vjperrow}
+    \begin{tcolorbox}
+                [vjcard, title={Per-row top-$k$}]
+            \begin{lstlisting}[style=vj,label={lst:tvf-per-row}]
+SELECT * FROM sirius_knn_join('R', 'emb', 'S', 'emb',
+  @join_mode => 'per-row', k => 5@, metric => 'l2');
+            \end{lstlisting}
+            \tcblower
+            \begin{lstlisting}[style=vj,label={lst:sql-per-row}]
 SELECT R.id, nn.id, nn.dist
 FROM R, @LATERAL@ (
-  SELECT S.id, array_distance(R.emb, S.emb) AS dist
-  FROM S
+  SELECT S.id, array_distance(R.emb, S.emb) AS dist FROM S
   @ORDER BY array_distance(R.emb, S.emb) LIMIT 5@) nn;
-\end{lstlisting}
-\end{tcolorbox}
+            \end{lstlisting}
+    \end{tcolorbox}
 
 % ---- global top-k ----
-\colorlet{vjmode}{vjglobal}
-\begin{tcolorbox}[vjcard, title={\bfseries Global top-$k$\hfill\itshape\mdseries the $k$ closest pairs in $R \times S$}]
-\begin{lstlisting}[style=vj]
-SELECT * FROM sirius_knn_join(
-  'R', 'emb', 'S', 'emb',
-  @join_mode => 'global', k => 5@,
-  metric => 'l2');
-\end{lstlisting}
-\tcblower
-\begin{lstlisting}[style=vj]
-SELECT R.id, S.id,
-       array_distance(R.emb, S.emb) AS dist
-FROM R, S
-@ORDER BY dist LIMIT 5@;
-\end{lstlisting}
-\end{tcolorbox}
+    \colorlet{vjmode}{vjglobal}
+    \begin{tcolorbox}
+                [vjcard, title={Global top-$k$}]
+            \begin{lstlisting}[style=vj,label={lst:tvf-global}]
+SELECT * FROM sirius_knn_join('R', 'emb', 'S', 'emb',
+  @join_mode => 'global', k => 5@, metric => 'l2');
+            \end{lstlisting}
+            \tcblower
+            \begin{lstlisting}[style=vj,label={lst:sql-global}]
+SELECT R.id, S.id, array_distance(R.emb, S.emb) AS dist
+FROM R, S @ORDER BY dist LIMIT 5@;
+            \end{lstlisting}
+    \end{tcolorbox}
 
 % ---- threshold ----
-\colorlet{vjmode}{vjthresh}
-\begin{tcolorbox}[vjcard, title={\bfseries Threshold\hfill\itshape\mdseries every pair within distance $\varepsilon$}]
-\begin{lstlisting}[style=vj]
-SELECT * FROM sirius_knn_join(
-  'R', 'emb', 'S', 'emb',
-  @join_mode => 'threshold', eps => 5@,
-  metric => 'l2');
-\end{lstlisting}
-\tcblower
-\begin{lstlisting}[style=vj]
-SELECT R.id, S.id,
-       array_distance(R.emb, S.emb) AS dist
-FROM R JOIN S
-  @ON array_distance(R.emb, S.emb) <= 5@;
-\end{lstlisting}
-\end{tcolorbox}
-
-% ---- metric ----
-\colorlet{vjmode}{black!60}
-\begin{tcolorbox}[vjcard, title={\bfseries Distance metric\hfill\itshape\mdseries applies to all three modes}, top=0.8mm, bottom=0.8mm]
-\footnotesize\ttfamily
-\textcolor{vjarg}{metric} => \textcolor{vjstr}{\textquotesingle l2\textquotesingle}\\
-\textcolor{vjarg}{metric} => \textcolor{vjstr}{\textquotesingle cosine\textquotesingle}
-\tcblower
-\footnotesize\ttfamily
-\textcolor{vjfn}{array\_distance}(R.emb, S.emb)\\
-\textcolor{vjfn}{array\_cosine\_distance}(R.emb, S.emb)
-\end{tcolorbox}
-\end{table*}
+    \colorlet{vjmode}{vjthresh}
+    \begin{tcolorbox}[vjcard, title={Threshold}]
+        \begin{lstlisting}[style=vj,label={lst:tvf-threshold}]
+SELECT * FROM sirius_knn_join('R', 'emb', 'S', 'emb',
+  @join_mode => 'threshold', eps => 5@, metric => 'l2');
+        \end{lstlisting}
+        \tcblower
+        \begin{lstlisting}[style=vj,label={lst:sql-threshold}]
+SELECT R.id, S.id, array_distance(R.emb, S.emb) AS dist
+FROM R JOIN S @ON array_distance(R.emb, S.emb) <= 5@;
+        \end{lstlisting}
+    \end{tcolorbox}
+\end{table}
