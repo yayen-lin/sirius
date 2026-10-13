@@ -16,3 +16,14 @@
 # run
 ./bench/vector/scaling-curve-1/run.sh; ./bench/vector/scaling-curve-2/run.sh; ./bench/vector/scaling-curve-3/run.sh; ./bench/vector/scaling-curve-4/run.sh; ./bench/vector/scaling-curve-5/run.sh; ./bench/vector/scaling-curve-6/run.sh; ./bench/vector/scaling-curve-7/run.sh
 ```
+
+## In-Memory Eval
+
+```bash
+
+# prep (to generate dim and slice if not run)
+./bench/vector/scaling-curve-2/prep.sh
+
+# run
+./bench/vector/in-memory/scaling-curve-4/run.sh; ./bench/vector/in-memory/scaling-curve-7/run.sh
+```

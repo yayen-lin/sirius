@@ -1,15 +1,15 @@
 ## scaling curve:
 
-Sirius, against duckdb bruteforce, against duckdb plain hnsw, against duckdb's hnsw accelerated index, against cuvs, against FAISS
-a. with growing k (see the GEMM kicks in at k>64 for sirius)
-b. with growing corpus size
-c. with growing probe size
+1. Sirius, against duckdb bruteforce, against duckdb plain hnsw, against duckdb's hnsw accelerated index, against cuvs, against FAISS
+   a. with growing k (see the GEMM kicks in at k>64 for sirius)
+   b. with growing corpus size
+   c. with growing probe size
 
 ## Need fix:
 
-- (fixed) Per-row: the planner already has output_cols, so it only needs to pass it down. The partial and the left part would then carry only the needed right and left columns.
-- (fixed) Global: work out the needed columns from the projections above the join.
-- (not fixed) Threshold: DuckDB returns a LogicalAnyJoin which gives no projection map, so we would have to compute one from whatever sits above the join.
+- Per-row (fixed): the planner already has output_cols, so it only needs to pass it down. The partial and the left part would then carry only the needed right and left columns.
+- Global (fixed): work out the needed columns from the projections above the join.
+- Threshold (not fixed): DuckDB gives no projection map, so we would have to compute one from whatever sits above the join.
 
 ## Note about cuvs top-k selection
 
@@ -29,7 +29,7 @@ cuvs             64   10      640000   128       10000     10000000       1e+11 
 cuvs             65   10      650000   128       10000     10000000       1e+11    1.28e+13      4544.8      4584.7      4638.9    0.0000000004                  2791.87  # -> GEMM kicks in
 cuvs            128   10     1280000   128       10000     10000000       1e+11    1.28e+13      4565.6      4611.9      4653.5    0.0000000004                  2775.42
 cuvs            256   10     2560000   128       10000     10000000       1e+11    1.28e+13      4876.6      4919.3      4965.3    0.0000000004                  2601.98
-cuvs            512   10     5120000   128       10000     10000000       1e+11    1.28e+13     27690.6     27996.1     28047.7    0.0000000022                   457.21 # -> switch to radix select
+cuvs            512   10     5120000   128       10000     10000000       1e+11    1.28e+13     27690.6     27996.1     28047.7    0.0000000022                   457.21 # -> switches to radix select
 cuvs           1024   10    10240000   128       10000     10000000       1e+11    1.28e+13     27984.8     28280.9     28352.0    0.0000000022                   452.60
 duckdb-bf         2   10       20000   128       10000     10000000       1e+11    1.28e+13    461281.0    465041.1    467860.0    0.0000000363                    27.52
 duckdb-bf         4   10       40000   128       10000     10000000       1e+11    1.28e+13    461301.0    464611.8    466593.0    0.0000000363                    27.55
@@ -59,7 +59,7 @@ faiss             8   10       80000   128       10000     10000000       1e+11 
 faiss            16   10      160000   128       10000     10000000       1e+11    1.28e+13      3109.1      3123.0      3135.1    0.0000000002                  4098.67
 faiss            32   10      320000   128       10000     10000000       1e+11    1.28e+13      3139.6      3154.4      3162.2    0.0000000002                  4057.80
 faiss            64   10      640000   128       10000     10000000       1e+11    1.28e+13      3325.9      3343.1      3353.2    0.0000000003                  3828.79
-faiss            65   10      650000   128       10000     10000000       1e+11    1.28e+13      3324.3      3343.6      3360.2    0.0000000003                  3828.22
+faiss            65   10      650000   128       10000     10000000       1e+11    1.28e+13      3324.3      3343.6      3360.2    0.0000000003       ``           3828.22
 faiss           128   10     1280000   128       10000     10000000       1e+11    1.28e+13      3397.2      3420.3      3438.9    0.0000000003                  3742.40
 faiss           256   10     2560000   128       10000     10000000       1e+11    1.28e+13      3732.3      3759.9      3776.3    0.0000000003                  3404.38
 faiss           512   10     5120000   128       10000     10000000       1e+11    1.28e+13      4334.5      4356.2      4369.4    0.0000000003                  2938.36
@@ -73,10 +73,10 @@ sirius           64   10      640000   128       10000     10000000       1e+11 
 sirius           65   10      650000   128       10000     10000000       1e+11    1.28e+13      5239.0      5251.2      5263.0    0.0000000004                  2437.54  # -> GEMM kicks in
 sirius          128   10     1280000   128       10000     10000000       1e+11    1.28e+13      5255.0      5275.7      5287.0    0.0000000004                  2426.22
 sirius          256   10     2560000   128       10000     10000000       1e+11    1.28e+13      5572.0      5598.2      5623.0    0.0000000004                  2286.45
-sirius          512   10     5120000   128       10000     10000000       1e+11    1.28e+13     37388.0     37610.9     37689.0    0.0000000029                   340.33 # -> switch to radix select
+sirius          512   10     5120000   128       10000     10000000       1e+11    1.28e+13     37388.0     37610.9     37689.0    0.0000000029                   340.33 # -> switches to radix select
 sirius         1024   10    10240000   128       10000     10000000       1e+11    1.28e+13     37672.0     37835.0     38023.0    0.0000000030                   338.31
 
-# per-row: varying corpus size
+# per-row: varying corpus size, k=10
 engine       corpus reps        rows   dim  probe_rows  corpus_rows       pairs    dist_ops      min_ms     mean_ms      max_ms       ms_per_op billion_dist_ops_per_sec
 cuvs             1k   10      100000   128       10000         1000       1e+07    1.28e+09         1.5         1.6         1.8    0.0000000012                   810.49
 cuvs            10k   10      100000   128       10000        10000       1e+08    1.28e+10        10.7        10.8        11.1    0.0000000008                  1188.42
@@ -109,7 +109,7 @@ sirius           1m   10      100000   128       10000      1000000       1e+10 
 sirius          10m   10      100000   128       10000     10000000       1e+11    1.28e+13      7672.0      7865.5      8008.0    0.0000000006                  1627.36
 sirius         100m   10      100000   128       10000    100000000       1e+12    1.28e+14     90447.0     91470.9     92174.0    0.0000000007                  1399.35
 
-# per-row: growing probe size
+# per-row: growing probe size, k=10
 engine        probe reps        rows   dim  probe_rows  corpus_rows       pairs    dist_ops      min_ms     mean_ms      max_ms       ms_per_op billion_dist_ops_per_sec
 duckdb            1   10          10   128           1     10000000       1e+07    1.28e+09       172.0       181.4       192.0    0.0000001417                     7.06
 duckdb           10   10         100   128          10     10000000       1e+08    1.28e+10       652.0       689.6       746.0    0.0000000539                    18.56
