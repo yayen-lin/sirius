@@ -1,3 +1,5 @@
+% Note: \end{lstlisting} can't be indented in order to get rid of the padding
+
 % TVF signature, then TVF vs native SQL for the three vector join modes
 \begin{table}[t]
     \centering
@@ -54,7 +56,7 @@ sirius_knn_join(
   left_output_columns =>,  -- default to pk/id (fast path)
   right_output_columns =>  -- default to pk/id (fast path)
 )
-        \end{lstlisting}
+\end{lstlisting}
     \end{tcolorbox}
 
 % ---- per-row top-k ----
@@ -64,14 +66,14 @@ sirius_knn_join(
             \begin{lstlisting}[style=vj,label={lst:tvf-per-row}]
 SELECT * FROM sirius_knn_join('R', 'emb', 'S', 'emb',
   @join_mode => 'per-row', k => 5@, metric => 'l2');
-            \end{lstlisting}
+\end{lstlisting}
             \tcblower
             \begin{lstlisting}[style=vj,label={lst:sql-per-row}]
 SELECT R.id, nn.id, nn.dist
 FROM R, @LATERAL@ (
   SELECT S.id, array_distance(R.emb, S.emb) AS dist FROM S
   @ORDER BY array_distance(R.emb, S.emb) LIMIT 5@) nn;
-            \end{lstlisting}
+\end{lstlisting}
     \end{tcolorbox}
 
 % ---- global top-k ----
@@ -81,12 +83,12 @@ FROM R, @LATERAL@ (
             \begin{lstlisting}[style=vj,label={lst:tvf-global}]
 SELECT * FROM sirius_knn_join('R', 'emb', 'S', 'emb',
   @join_mode => 'global', k => 5@, metric => 'l2');
-            \end{lstlisting}
+\end{lstlisting}
             \tcblower
             \begin{lstlisting}[style=vj,label={lst:sql-global}]
 SELECT R.id, S.id, array_distance(R.emb, S.emb) AS dist
 FROM R, S @ORDER BY dist LIMIT 5@;
-            \end{lstlisting}
+\end{lstlisting}
     \end{tcolorbox}
 
 % ---- threshold ----
@@ -95,11 +97,11 @@ FROM R, S @ORDER BY dist LIMIT 5@;
         \begin{lstlisting}[style=vj,label={lst:tvf-threshold}]
 SELECT * FROM sirius_knn_join('R', 'emb', 'S', 'emb',
   @join_mode => 'threshold', eps => 5@, metric => 'l2');
-        \end{lstlisting}
+\end{lstlisting}
         \tcblower
         \begin{lstlisting}[style=vj,label={lst:sql-threshold}]
 SELECT R.id, S.id, array_distance(R.emb, S.emb) AS dist
 FROM R JOIN S @ON array_distance(R.emb, S.emb) <= 5@;
-        \end{lstlisting}
+\end{lstlisting}
     \end{tcolorbox}
 \end{table}
