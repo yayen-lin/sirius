@@ -1,0 +1,151 @@
+% exact vector join: batch pairs, per-tile distance + local reduction, then global reduction
+\begin{figure*}
+    \centering
+    \definecolor{vjR}{HTML}{3B6FB6}
+    \definecolor{vjS}{HTML}{E07B39}
+    \definecolor{vjD}{HTML}{6A4C93}
+    % one batch: light box, darker stripes for its rows (vectors)
+    \newcommand{\vjbatch}[3]{% name, position, color
+        \node[draw=#3!80!black, fill=#3!12, rounded corners=1.5pt, minimum width=0.8cm,
+              minimum height=0.5cm, inner sep=0pt] (#1) at (#2) {};
+        \foreach \dy in {-0.12,0,0.12}
+            \draw[#3!75, line width=1.3pt, line cap=round]
+                ([xshift=0.12cm, yshift=\dy cm]#1.west) -- ([xshift=-0.12cm, yshift=\dy cm]#1.east);
+    }
+    % 3x5 distance tile with the cells that survive the local reduction filled in
+    \newcommand{\vjmini}[4]{% name, x, y, kept cells as row/col
+        \begin{scope}[shift={(#2,#3)}]
+            \foreach \ri in {0,1,2} {\foreach \ci in {0,...,4} {
+                \filldraw[fill=vjD!6, draw=black!30, line width=0.3pt]
+                    ({-0.4+\ci*0.16},{0.08-\ri*0.16}) rectangle ++(0.16,0.16);}}
+            \foreach \ri/\ci in {#4} {
+                \filldraw[fill=vjD!80, draw=black!30, line width=0.3pt]
+                    ({-0.4+\ci*0.16},{0.08-\ri*0.16}) rectangle ++(0.16,0.16);}
+        \end{scope}
+        \node[minimum width=0.8cm, minimum height=0.48cm, inner sep=0pt] (#1) at (#2,#3) {};
+    }
+    \begin{tikzpicture}[
+        font=\scriptsize\sffamily,
+        panel/.style={fill=black!5, draw=black!20, rounded corners=4pt},
+        ptitle/.style={anchor=west, font=\small\sffamily\bfseries},
+        head/.style={align=center},
+        flow/.style={-{Latex[length=1.6mm]}, black!70, line width=0.6pt},
+        pairarrow/.style={{Latex[length=1.3mm]}-{Latex[length=1.3mm]}, line width=0.5pt},
+        kern/.style={draw=black!60, fill=white, rounded corners=2pt, minimum width=1.55cm,
+                     minimum height=0.75cm, align=center},
+        op/.style={draw=black!60, fill=white, rounded corners=2pt, minimum width=2.5cm,
+                   minimum height=0.8cm, align=center},
+        sub/.style={font=\tiny\sffamily},
+    ]
+
+        % ---------- panels ----------
+        \draw[panel] (0,0.15) rectangle (4.15,5.3);
+        \node[ptitle] at (0.15,5.05) {\faMemory~Host memory~/~\faHdd~Disk};
+        \draw[panel] (5.25,0.15) rectangle (17.55,5.3);
+        \node[ptitle] at (5.4,5.05) {\faMicrochip~GPU};
+
+        % ---------- inputs: R and S split into batches ----------
+        \node[head] at (1.0,4.2) {$R$ (probe)};
+        \node[head] at (3.1,4.2) {$S$ (corpus)};
+        \vjbatch{r1}{1.0,3.6}{vjR}
+        \vjbatch{r2}{1.0,2.85}{vjR}
+        \vjbatch{rm}{1.0,1.45}{vjR}
+        \vjbatch{s1}{3.1,3.6}{vjS}
+        \vjbatch{s2}{3.1,2.85}{vjS}
+        \vjbatch{sn}{3.1,1.45}{vjS}
+        \node at (1.0,2.2) {$\vdots$};
+        \node at (3.1,2.2) {$\vdots$};
+        \node[left=1pt of r1] {$R_1$};
+        \node[left=1pt of r2] {$R_2$};
+        \node[left=1pt of rm] {$R_m$};
+        \node[right=1pt of s1] {$S_1$};
+        \node[right=1pt of s2] {$S_2$};
+        \node[right=1pt of sn] {$S_n$};
+
+        % every R batch joins every S batch; only R_1's pairs are drawn solid
+        \foreach \a in {r2,rm} {\foreach \b in {s1,s2,sn} {
+            \draw[pairarrow, black!15] (\a.east) -- (\b.west);}}
+        \foreach \b in {s1,s2,sn} {
+            \draw[pairarrow, black!70] (r1.east) -- (\b.west);}
+        \node[sub] at (2.05,0.55) {for each $R_i$: for each $S_j$};
+
+        % load one pair onto the GPU
+        \draw[-{Latex[length=2.2mm]}, line width=1.2pt, black!65] (4.2,2.5) -- (5.2,2.5)
+            node[midway, above, sub, align=center] {load\\$(R_i, S_j)$};
+
+        % ---------- step headers ----------
+        \node[head] at (6.2,4.55) {\textbf{Input}\\{\tiny one pair per task}};
+        \node[head] at (8.0,4.55) {\textbf{Step 1}: Distance\\{\tiny GEMM}};
+        \node[head] at (10.95,4.55) {\textbf{Step 2a}: Local reduction\\{\tiny within a pair}};
+        \node[head] at (14.15,4.55) {\textbf{Step 2b}: Global reduction\\{\tiny across pairs}};
+
+        % ---------- input pair ----------
+        \vjbatch{ri}{6.2,2.85}{vjR}
+        \vjbatch{sj}{6.2,1.75}{vjS}
+        \node[left=1pt of ri] {$R_i$};
+        \node[left=1pt of sj] {$S_j$};
+
+        % ---------- step 1: distance tiles (GEMM) ----------
+        \begin{scope}[shift={(7.85,2.3)}]
+            % tiles behind the current one: the full m_i x n_j matrix is never built
+            \foreach \o in {0.2,0.1}
+                \draw[black!40, fill=white] ({-0.6+\o},{-0.4-\o}) rectangle ({0.6+\o},{0.4-\o});
+            \foreach \ri in {0,...,3} {\foreach \ci in {0,...,5} {
+                \pgfmathtruncatemacro{\s}{mod(3*\ri+7*\ci+1,5)*15+10}
+                \filldraw[fill=vjD!\s, draw=white, line width=0.3pt]
+                    ({-0.6+\ci*0.2},{0.2-\ri*0.2}) rectangle ++(0.2,0.2);}}
+            \draw[black!50] (-0.6,-0.4) rectangle (0.6,0.4);
+            % rows come from R_i, columns from S_j
+            \fill[vjR!70] (-0.7,-0.4) rectangle (-0.63,0.4);
+            \fill[vjS!70] (-0.6,0.43) rectangle (0.6,0.5);
+        \end{scope}
+        \node[minimum width=1.2cm, minimum height=0.8cm, inner sep=0pt] (tile) at (7.85,2.3) {};
+        \node[sub] at (7.95,1.45) {distance tiles};
+        \draw[flow] (ri.east) -- (7.1,2.45);
+        \draw[flow] (sj.east) -- (7.1,2.15);
+
+        % ---------- step 2a: per-tile selection, inside the kernel ----------
+        \node[kern] (topk) at (10.0,2.9) {per-tile\\top-$k$ select};
+        \node[kern] (eps)  at (10.0,1.1) {per-tile\\$\varepsilon$ filter};
+        \draw[flow] ([xshift=0.22cm]tile.east) -- (topk.west);
+        \draw[flow] ([xshift=0.22cm]tile.east) -- (eps.west);
+
+        % step 1 and step 2a run together in one kernel, tile by tile
+        \draw[black!55, dashed, rounded corners=3pt] (7.0,0.6) rectangle (10.9,3.45);
+        \node[sub, font=\tiny\sffamily\itshape, align=center] at (8.05,0.88) {in-kernel\\(one tile at a time)};
+
+        % local results of one pair (dark cells survive)
+        \vjmini{prmini}{11.9}{3.5}{0/1,0/3,1/0,1/2,2/2,2/4}
+        \vjmini{glmini}{11.9}{2.3}{0/3,2/1}
+        \vjmini{thmini}{11.9}{1.1}{0/1,1/0,1/2,1/4,2/3}
+        \node[sub, above=1pt of prmini] {\textbf{Per-row}: $k$ per row};
+        \node[sub, above=1pt of glmini] {\textbf{Global}: $k$ per pair};
+        \node[sub, above=1pt of thmini] {\textbf{Threshold}: $\le \varepsilon$};
+        \draw[flow] ([yshift=0.2cm]topk.east) -- (prmini.west);
+        \draw[flow] ([yshift=-0.25cm]topk.east) -- (glmini.west);
+        \draw[flow] (eps.east) -- (thmini.west);
+
+        % ---------- step 2b: global reduction ----------
+        \node[op] (prop) at (14.15,3.5)
+            {\texttt{VECTOR\_TOPK\_MERGE}\\{\tiny merge $n$ partials per $R_i$}};
+        \node[op] (glop) at (14.15,2.3)
+            {\texttt{TOP\_N} $\rightarrow$ \texttt{TOP\_N\_MERGE}\\{\tiny top-$k$ of all candidates}};
+        \node[op, dashed] (thop) at (14.15,1.1)
+            {union\\{\tiny no extra operator}};
+        \draw[flow] (prmini.east) -- (prop.west);
+        \draw[flow] (glmini.east) -- (glop.west);
+        \draw[flow] (thmini.east) -- (thop.west);
+
+        % ---------- outputs ----------
+        \node[align=center] (prout) at (16.55,3.5) {$k$ per\\probe row};
+        \node[align=center] (glout) at (16.55,2.3) {$k$ pairs};
+        \node[align=center] (thout) at (16.55,1.1) {all pairs\\within $\varepsilon$};
+        \draw[flow] (prop.east) -- (prout.west);
+        \draw[flow] (glop.east) -- (glout.west);
+        \draw[flow] (thop.east) -- (thout.west);
+    \end{tikzpicture}
+    \caption{
+        Exact vector join. Both relations are split into batches, and every probe batch $R_i$ is joined with every corpus batch $S_j$. Each task loads one batch pair onto the GPU; the other batches can be spilled to host memory or disk. Within a pair, Step 1 computes distances with GEMM and Step 2a reduces them in the same kernel, one tile at a time, so the full $m_i \times n_j$ distance matrix is never built. The top-$k$ modes keep $k$ candidates per row (global top-$k$ then keeps $k$ per pair), and threshold keeps every pair within $\varepsilon$. Step 2b combines the local results of all pairs into the final answer.
+    }
+    \label{fig:exact-join}
+\end{figure*}
