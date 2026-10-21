@@ -2,6 +2,13 @@
 
 % deeper into the arguments
 
+\yxy{Sec 3.1 currently has significant overlap with Sections 2.2 and 2.3. Here are a few thoughts:\\
+- Section 3 title can probably be something like "GPU Vector Join". Then at the beginning of Sec 3 we can define the term "vector join" and keep using it for the rest of the paper.\\
+- Sec 3.1 summarizes 2.2 and 2.3 and explains Figure 1. Given Sec 2 already explains the details, 3.1 can be much shorter. \\
+- 3.2 we can motivate a GPU-based vector join solution. We should keep Figure 2. The current 3.2 is already a great starting point, but we can make it more concise. For example, we should jump quickly to motivate a GPU-based solution; but the current first paragraph is talking about something else\\
+- maybe add a 3.3 to talk about vector join interface. We can mention both TVF and SQL native syntax.
+}
+
 \subsection{The Transition: From Similarity Search to Similarity Join}\label{subsec:the-transition}
 
 \input{quadrant}
@@ -27,7 +34,6 @@ Columnar engines store a column of embeddings as one contiguous matrix, and the 
 Just as column stores made it feasible to ask new questions of structured data, the GPU and columnar storage together make it feasible to relate unstructured data at the scale of whole collections.
 Relational OLAP became the basis of decision support over structured data, and we believe vector OLAP can play the same role for everything that embeddings make comparable.
 
-% \yxy{maybe batched vector search itself is also a good example.}
 % the use cases in vector join that strengthen the transition and the shortcomings that set up the next subsection
 The workloads for the similarity join already exist under different names.
 In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points, and pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{HuSieveIVF26, AbbasSemDeDup23}.
@@ -41,8 +47,6 @@ Where an engine has no similarity join, users write it as one search per probe r
 
 \subsection{The Similarity Join as a GPU Database Operator}\label{subsec:why-gpu-database}
 
-% \yxy{The point of this section is to argue a vector join is just another join. But according to S3.3, vector join is already integrated into real systems; so it is a bit awkward to argue for something that is already real. I suggest just expand S3.3 a little bit with the contents where, to argue briefly vector join should be a join operator, and use databricks/DuckDB as evidence.}
-
 % argument 2: similarity join on a GPU engine
 % the three stages, and the industry has completed the first two
 Relational analytics reached its current form in three stages.
@@ -54,10 +58,6 @@ Computing distances one pair at a time reads two values for every multiply-accum
 To make the join compute-bound, the Databricks operator reuses each corpus vector across a tile of probe rows, and their roofline estimate shows that this holds once about 64 query vectors are buffered~\cite{DatabricksNearestByJoinBlog26}.
 Once the join is compute-bound, its speed depends on how much arithmetic the hardware delivers.
 We argue that the third stage is to run the similarity join as an operator in a GPU-native SQL engine.
-
-% \yxy{this subsection looks AI generated, which is ok for now. I think we don't need very long paragraphs here. Make the points more concise and clear. We can add some simple experiments to make the points very clear. Maybe two figures showing: (1) vector search in CPU vs. GPU (small gain) and (2) vector join in CPU vs. GPU (huge gain).}
-
-% \yxy{a better way to argue heavier is it's many-to-many instead of one-to-many}
 
 % why the GPU is a good fit
 If the similarity join is the analytical half of vector processing, it should run where analytical processing is heading.
@@ -74,7 +74,8 @@ For a join, $RS^\top$ is a matrix-matrix product in which each corpus vector is 
 % evidence that supports the claim of the gain in vector join vs vector search
 \input{exact-probe-sweep}
 
+\andy{TODO: revisit this, need a new run after the code change, or maybe move get rid of this paragraph and point to evaluation}
 Our measurements in the exact setting show that the GPU's advantage grows as the work moves from a matrix-vector product to a matrix-matrix product (Figure~\ref{fig:exact-probe-sweep}).
-On GIST1M, a single exact search runs about 20 times faster on Sirius than on DuckDB\@.
-On a threshold join against Bigann10M, growing the probe side from one row to 10K rows raises Sirius's throughput from 16 million to 24 billion distance computations per second (\textasciitilde1,500x), while DuckDB's rises only from 62 million to 250 million (\textasciitilde4x).
-Across our threshold experiments the join runs more than 100 times faster on Sirius, and at 100K probe rows against 10M corpus vectors DuckDB does not finish within our time limit.
+We run an exact threshold join against Bigann10M and vary the number of probe rows $m$ from one to 10M\@.
+At $m=1$ the join is a matrix-vector product, and Sirius is ....
+As $m$ grows, Sirius's throughput rises ..., while DuckDB's plateaus at about 250 million by $m=100$.

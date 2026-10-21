@@ -14,9 +14,6 @@ Comparing two objects semantically therefore reduces to computing a distance or 
 All three can be computed from dot products and vector norms, so comparing many vectors against many others becomes a dense matrix multiplication (Section~\ref{subsec:why-gpu-database}).
 We use the terms \emph{embedding} and \emph{vector} interchangeably.
 
-% \yxy{also explain how they are integrated into databases today: explicitly stored as columns, or implicitly generated as needed.}
-% \yxy{add citations after each individual system}
-
 % how they are integrated into databases, explicit vs implicit
 Relational databases store embeddings as a column.
 Some systems add a dedicated \texttt{VECTOR} type with a declared dimension, as in pgvector~\cite{PgvectorRepo}, Snowflake~\cite{SnowflakeVector}, SQL Server~\cite{SQLServer2025Vector}, and MySQL~\cite{MySQLHeatWaveVector}, while others reuse an existing array type, as in DuckDB~\cite{DuckDBVSS}, ClickHouse~\cite{ClickHouseVSS}, BigQuery~\cite{BigQueryVectorSearchFn}, and Databricks~\cite{DatabricksNearestByJoinBlog26}.
@@ -30,7 +27,6 @@ In either form, the embeddings reach the execution engine as a column of fixed-l
 \subsection{Similarity Search}\label{subsec:vector-search}
 
 % what is a vector/semantic/similarity search & exact and approximate
-% \yxy{maybe give a quick example of a vector search query}
 A similarity search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.
 In SQL it is an ordering by distance followed by a limit; the DuckDB query below returns the five documents closest to a query embedding \texttt{\$q}:
 
@@ -52,8 +48,6 @@ The two most common index families are cluster-based and graph-based: IVF partit
 % dedicated vector databases
 Similarity search underpins retrieval-augmented generation (RAG) for LLMs~\cite{LewisRAG20}, recommendation, and e-commerce~\cite{PanWangLi24, WangMilvus21}, and two kinds of systems offer it: dedicated vector databases and relational databases extended with vector support.
 
-% \yxy{expand the dedicated vs. integrated part a bit more. At least on how vector search is integrated into traditional DB.}
-
 Dedicated vector databases such as Milvus~\cite{WangMilvus21}, Pinecone~\cite{PineconeDocs}, Weaviate~\cite{WeaviateDocs}, and Qdrant~\cite{QdrantDocs} are built around similarity search from the ground up.
 This lets them offer more index types and tune storage and execution for their target workload, but at the cost of everything else a database provides.
 They expose their own client APIs or query languages instead of SQL, and their guarantees are weaker than ACID transactions: Weaviate has no transactions~\cite{WeaviateFAQ}, Pinecone is eventually consistent~\cite{PineconeFreshness}, and Milvus defaults to bounded staleness~\cite{MilvusConsistency}.
@@ -66,8 +60,6 @@ Stonebraker and Pavlo point to this integration as evidence that similarity sear
 A case study of PostgreSQL by Zhang et al.\ concludes that relational databases have no inherent barrier to efficient vector search, and that the remaining performance gap comes from implementation choices~\cite{ZhangPgLimits24}.
 The syntax, however, is not yet standardized, though a vector extension is under way for the next SQL standard~\cite{EisentrautSQL202y25}.
 For example, the search above is an \texttt{ORDER BY} with \texttt{LIMIT} in pgvector~\cite{PgvectorRepo} and DuckDB~\cite{DuckDBVSS}, an \texttt{ORDER BY} with \texttt{FETCH APPROX FIRST} in Oracle~\cite{OracleAIVectorSearch}, and a \texttt{VECTOR\_SEARCH} table function in BigQuery~\cite{BigQueryVectorSearchFn}, SQL Server~\cite{SQLServerVectorSearchFn}, and Databricks~\cite{DatabricksVectorSearchFn26}.
-
-% \yxy{Add a discussion on how vector search is supported in GPU today}
 
 % similarity search on the GPU today
 On the GPU, similarity search comes mainly from libraries.
@@ -82,8 +74,6 @@ When the query side is instead a relation, whether stored or produced by other o
 
 \subsection{Similarity Join}\label{subsec:vector-join}
 
-% \yxy{title shouldn't be vector join, since it's our proposal. Maybe semantic similarity join or something alike.}
-
 % what a vector/semantic/similarity join is & its three forms
 A similarity join takes two relations of vectors instead of one query vector.
 Given a relation $R$ of $m$ probe vectors, a relation $S$ of $n$ corpus vectors, each of dimension $d$, and a distance function $\delta$, it returns the pairs $(r, s) \in R \times S$ that satisfy a similarity condition.
@@ -93,8 +83,6 @@ The condition takes one of three forms, each studied under its own name:
     \item \emph{Global top-$k$}: the $k$ pairs in $R \times S$ with the smallest distance, known as the \emph{$k$ closest pairs} or \emph{distance join}~\cite{HjaltasonSametDistJoin98, CorralClosestPair00}; for example, finding the city nearest to any river.
     \item \emph{Threshold}: every pair with $\delta(r, s) \le \varepsilon$, known as the \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98}; for example, finding all pairs of similar images~\cite{ShimSimJoin97}.
 \end{itemize}
-
-% \yxy{this section should be much longer. We can provide a simple historical view on how semantic similarity join evolved over the years. It can be something like: (1) early days theoretical work (2) later built into some systems (3) thriving with modern vector data type.}
 
 % historical view
 The similarity join is decades old, and its history falls into three stages: standalone algorithms, research prototypes, and production SQL engines.
@@ -121,3 +109,5 @@ DuckDB offers brute-force join macros (\texttt{vss\_join} and \texttt{vss\_match
 Recent algorithmic work targets approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
 To our knowledge, these engines and recent algorithms execute the join on the CPU\@.
 The rest of this paper shows why and how to run the join on the GPU as an operator inside a SQL engine.
+
+\yxy{We probably can add a Sec 2.4 to talk about background in GPU-accelerated data processing, both SQL and vector search, and point out that there is no GPU-accelerated similarity join.}
