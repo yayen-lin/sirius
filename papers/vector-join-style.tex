@@ -1,0 +1,37 @@
+% shared styles for the TVF signature table and the mode table
+\definecolor{vjperrow}{HTML}{2563EB}
+\definecolor{vjglobal}{HTML}{EA580C}
+\definecolor{vjthresh}{HTML}{16A34A}
+\colorlet{vjmode}{black}
+% text between @...@ marks the clause that selects the join mode
+\lstdefinestyle{vj}{
+    language=SQL, basicstyle=\ttfamily\scriptsize,
+    columns=fullflexible, keepspaces=true, showstringspaces=false,
+    frame=none, aboveskip=0pt, belowskip=0pt,
+    morekeywords={LATERAL,LIMIT},
+    keywordstyle=\bfseries,
+    moredelim=[is][\color{vjmode}\bfseries]{@}{@}}
+% colored syntax for listings without mode highlights (TVF signature, Section 2.2 query)
+\definecolor{vjkw}{HTML}{7C3AED}
+\definecolor{vjfn}{HTML}{DB2777}
+\definecolor{vjstr}{HTML}{0F766E}
+\definecolor{vjarg}{HTML}{64748B}
+\definecolor{vjcom}{HTML}{94A3B8}
+\lstdefinestyle{vjcolor}{
+    style=vj,
+    keywordstyle=\color{vjkw}\bfseries,
+    emph={sirius\_knn\_join,array\_distance,array\_cosine\_distance},
+    emphstyle=\color{vjfn},
+    emph={[2]join\_mode,k,eps,metric,search\_mode,output\_type,left\_output\_columns,right\_output\_columns},
+    emphstyle={[2]\color{vjarg}},
+    stringstyle=\color{vjstr},
+    commentstyle=\color{vjcom}}
+% every box shares one frame and background color
+\tcbset{vjcard/.style={
+    arc=1.2mm, boxrule=0.6pt, left=1.5mm, right=1.5mm, top=1mm, bottom=1mm,
+    before skip=1mm, after skip=1mm,
+    colframe=black!45, colback=black!3},
+    vjmode/.style={before upper={\colorlet{vjmode}{#1}}}}
+\newcommand{\vjhead}[2]{\textcolor{#1}{\footnotesize\sffamily\bfseries #2}}
+% row label, vertically centered against its row of boxes
+\newcommand{\vjrow}[1]{\begin{minipage}[c]{1.2em}\centering\rotatebox{90}{\footnotesize\sffamily\bfseries #1}\end{minipage}}

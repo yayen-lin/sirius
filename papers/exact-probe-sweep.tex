@@ -1,11 +1,10 @@
 \begin{figure}[t]
     \centering
     \includegraphics[width=\columnwidth]{exact-probe-sweep}
+    \captionsetup{textfont=normalfont}
     \caption{
-        Exact threshold join of $m$ probe rows against Bigann10M ($n=10$M, $d=128$, $\varepsilon=250$), with both tables in memory.
-        Throughput is distance computations per second, and the labels give Sirius's speedup over DuckDB\@.
-        DuckDB does not finish within our time limit from $m=100$K.
-        GPU: Quadro RTX 6000 (24\,GB, 672\,GB/s, 16 TFLOPS FP32). CPU: dual Xeon Gold 6126 (24 cores, 256\,GB/s).
+        Exact threshold join against Bigann10M with tables in memory.
+        Throughput is distance computations per second; labels give Sirius's speedup over DuckDB\@.
     }
     \label{fig:exact-probe-sweep}
 \end{figure}

@@ -1,6 +1,4 @@
-\section{Motivation}\label{sec:motivation}
-
-% deeper into the arguments
+\section{GPU Vector Join}\label{sec:gpu-vector-join}
 
 \yxy{Sec 3.1 currently has significant overlap with Sections 2.2 and 2.3. Here are a few thoughts:\\
 - Section 3 title can probably be something like "GPU Vector Join". Then at the beginning of Sec 3 we can define the term "vector join" and keep using it for the rest of the paper.\\
@@ -9,73 +7,88 @@
 - maybe add a 3.3 to talk about vector join interface. We can mention both TVF and SQL native syntax.
 }
 
-\subsection{The Transition: From Similarity Search to Similarity Join}\label{subsec:the-transition}
+% define vector join and its three modes
+A \emph{vector join} is a similarity join between two relations of embeddings that runs inside a SQL engine.
+It is the join of the third stage in Section~\ref{subsec:similarity-join}, and we use this term for the rest of the paper.
+Its three forms are its \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
+
+\subsection{From Vector Search to Vector Join}\label{subsec:search-to-join}
 
 \input{quadrant}
 
-% argument 1: vector data is now at the same transition point
-% the shift from OLTP to OLAP and the questions they answer, and that leads us to the vector OLAP
+% Figure 1, relational side: OLTP and OLAP are different problems with different engines
 Relational workloads split into transaction processing (OLTP) and analytical processing (OLAP) because the two turned out to be different problems~\cite{StonebrakerPavloAround24}.
-An OLTP query asks ``what matches this'': it looks up one customer, one order, or one account, and returns in milliseconds.
-An OLAP query asks ``what matches what'': it joins whole tables against each other and aggregates the result, as in total sales by region over the last quarter.
-OLTP serves lookups from persistent indexes built ahead of time (e.g., B-trees) and is measured by latency, while OLAP scans its inputs and builds temporary structures (e.g., a hash table) at query time over intermediate results, and is measured by throughput.
-Stonebraker and \c{C}etintemel argued that these differences end the era of a single general-purpose engine, and that specialized engines outperform row stores designed for OLTP on analytical workloads~\cite{StonebrakerOneSize05}.
-Column stores such as C-Store and MonetDB proved this in practice and analytical processing grew into its own execution model and field of study~\cite{StonebrakerCStore05, IdreosMonetDB12, StonebrakerPavloAround24}.
-These engines now form the basis of decision support and analysis of historical data that organizations use to guide business decisions~\cite{ChaudhuriDayal97}.
+An OLTP query asks ``what matches this'' and looks up one customer, one order, or one account, while an OLAP query asks ``what matches what'' and joins whole tables against each other.
+OLTP serves lookups from persistent indexes built ahead of time (e.g., B-trees) and is measured by latency, while OLAP builds temporary structures (e.g., a hash table) at query time over intermediate results, and is measured by throughput.
+Stonebraker and \c{C}etintemel argued that these differences end the era of a single general-purpose engine~\cite{StonebrakerOneSize05}, and column stores such as C-Store and MonetDB proved this in practice~\cite{StonebrakerCStore05, IdreosMonetDB12}.
+These engines now form the basis of decision support over historical data~\cite{ChaudhuriDayal97}.
 We argue that vector data is now at the same transition point (Figure~\ref{fig:quadrant}).
 
-% the quadrant, and the introduction of vector OLAP + what it brings
-Similarity search is the OLTP half: it asks ``what is similar to this'' and returns the nearest neighbors of one query vector.
-The similarity join is the OLAP half: it asks ``what is similar to what'' and relates the rows of one table of vectors to the rows of another.
-The similarity join introduces a new kind of relation.
-A relational join follows relationships that were declared ahead of time as keys, while a similarity join finds relationships that nobody declared, and between rows that share no key but a meaning.
-Recent trends in hardware and storage make this relation practical to compute.
-Columnar engines store a column of embeddings as one contiguous matrix, and the GPU is built to compare one matrix against another (Section~\ref{subsec:why-gpu-database}).
-Just as column stores made it feasible to ask new questions of structured data, the GPU and columnar storage together make it feasible to relate unstructured data at the scale of whole collections.
-Relational OLAP became the basis of decision support over structured data, and we believe vector OLAP can play the same role for everything that embeddings make comparable.
+% Figure 1, vector side: vector search is the OLTP half, and the vector join is the OLAP half
+Vector search is the OLTP half: it asks ``what is similar to this'' and returns the nearest neighbors of one query vector.
+The vector join is the OLAP half: it asks ``what is similar to what'' and relates the rows of one table of vectors to the rows of another.
+A relational join follows relationships that were declared ahead of time as keys, while a vector join finds relationships that nobody declared, between rows that share no key but a meaning.
+We believe the vector join can play the same role in decision support for everything that embeddings make comparable.
 
-% the use cases in vector join that strengthen the transition and the shortcomings that set up the next subsection
-The workloads for the similarity join already exist under different names.
+% workloads that are vector joins, and the mode each one uses
+The workloads for this OLAP half already exist under different names.
 In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points, and pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{HuSieveIVF26, AbbasSemDeDup23}.
 In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings, which reduces a classically hard matching problem to a similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
 In retrieval and recommendation, a batch of user or query embeddings is compared against an item catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
-More generally, a batched similarity search is itself a join, and GPU libraries design their search APIs around it (Section~\ref{subsec:vector-search}).
-However, the two halves are not equally developed.
-The OLTP half is now a standard feature and offered by nearly every major database.
-The OLAP half, in contrast, has reached SQL engines only recently, and to our knowledge it runs on the CPU (Section~\ref{subsec:vector-join}).
-Where an engine has no similarity join, users write it as one search per probe row, which is a nested-loop join, a plan that optimizers typically avoid when the probe side is large.
+The per-row top-$k$ mode serves workloads that need the nearest neighbors of every probe row, such as batch retrieval and hard-negative mining, and the threshold mode serves workloads that need every pair within a distance bound, such as deduplication and entity resolution.
 
-\subsection{The Similarity Join as a GPU Database Operator}\label{subsec:why-gpu-database}
+\subsection{Why the GPU}\label{subsec:why-gpu}
 
-% argument 2: similarity join on a GPU engine
-% the three stages, and the industry has completed the first two
-Relational analytics reached its current form in three stages.
-It was first expressed in SQL, then it became physical operators, and finally engines were redesigned around the hardware that runs these operators.
-The similarity join has completed the first two stages.
-BigQuery, DuckDB, Spark, and Databricks already expose it in SQL, and DuckDB and Databricks execute it with dedicated physical operators (Section~\ref{subsec:vector-join}).
-What remains is the third stage, and the analysis behind the Databricks operator indicates where it leads.
-Computing distances one pair at a time reads two values for every multiply-accumulate (MAC), so it is bound by memory bandwidth. \andy{explains MACs = distance computations × d in evaluation}
-To make the join compute-bound, the Databricks operator reuses each corpus vector across a tile of probe rows, and their roofline estimate shows that this holds once about 64 query vectors are buffered~\cite{DatabricksNearestByJoinBlog26}.
-Once the join is compute-bound, its speed depends on how much arithmetic the hardware delivers.
-We argue that the third stage is to run the similarity join as an operator in a GPU-native SQL engine.
-
-% why the GPU is a good fit
-If the similarity join is the analytical half of vector processing, it should run where analytical processing is heading.
-Analytical queries scan large inputs and are typically bound by memory bandwidth, and a GPU offers several times the memory bandwidth of a CPU\@.
-Yogatama et al.\ show that a GPU-native SQL engine outperforms state-of-the-art CPU engines on TPC-H and ClickBench, with higher cost efficiency~\cite{Yogatama26, SiriusClickBench25}.
-The similarity join is an especially good fit, because moving from one query vector to many changes the kind of work the hardware does.
-Under the common metrics, distance computation reduces to dot products and vector norms (Section~\ref{subsec:embeddings-and-vectors}).
-For two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, r \cdot s$.
+% the vector join is a matrix product, so its work is dominated by GEMM
+The vector join is an especially good fit for the GPU, because moving from one query vector to many changes the kind of work the hardware does.
+Under the metrics of Section~\ref{subsec:embeddings-and-vectors}, for two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, r \cdot s$.
 If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
 The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so when both sides are large, the work is dominated by a dense matrix multiplication (GEMM).
-A single search ($m=1$) is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
-For a join, $RS^\top$ is a matrix-matrix product in which each corpus vector is reused across many probe rows, so the work becomes compute-bound and runs as GEMM.
+Columnar engines store a column of embeddings as one contiguous matrix, and the GPU is built to compare one matrix against another.
 
-% evidence that supports the claim of the gain in vector join vs vector search
+% a search is bandwidth-bound and a join is compute-bound, so the join belongs in a GPU-native SQL engine
+A single search ($m=1$) is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
+This is why the GPU libraries in Section~\ref{subsec:gpu-data-processing} take a batch of queries per call.
+A join that computes distances one pair at a time has the same problem, because it reads two values for every multiply-accumulate (MAC).
+% \andy{explains MACs = distance computations × d in evaluation}
+Computed as $RS^\top$, the join is instead a matrix-matrix product in which each corpus vector is reused across many probe rows, so the work becomes compute-bound and runs as GEMM.
+The Databricks operator relies on the same reuse, and its roofline estimate shows that the join becomes compute-bound once about 64 probe vectors are buffered~\cite{DatabricksNearestByJoinBlog26}.
+Once the join is compute-bound, its speed depends on how much arithmetic the hardware delivers.
+We therefore argue that the vector join should run as an operator in a GPU-native SQL engine.
+
 \input{exact-probe-sweep}
 
+% evidence: the GPU's advantage grows as the probe side grows
 \andy{TODO: revisit this, need a new run after the code change, or maybe move get rid of this paragraph and point to evaluation}
-Our measurements in the exact setting show that the GPU's advantage grows as the work moves from a matrix-vector product to a matrix-matrix product (Figure~\ref{fig:exact-probe-sweep}).
-We run an exact threshold join against Bigann10M and vary the number of probe rows $m$ from one to 10M\@.
-At $m=1$ the join is a matrix-vector product, and Sirius is ....
-As $m$ grows, Sirius's throughput rises ..., while DuckDB's plateaus at about 250 million by $m=100$.
+Figure~\ref{fig:exact-probe-sweep} shows this shift on an exact threshold join of $m$ probe rows against Bigann10M\@.
+At $m=1$, the join is a matrix-vector product, and Sirius is only 3.6$\times$ faster than DuckDB\@.
+As $m$ grows, the join becomes a matrix-matrix product, and Sirius's throughput keeps rising until $m=1$K, while DuckDB's levels off by $m=100$.
+The speedup grows with it, to 106$\times$ at $m=10$K, and the per-row top-$k$ join shows the same pattern.
+
+\subsection{Vector Join Interface}\label{subsec:vector-join-interface}
+
+\input{vector-join-modes}
+
+% two interfaces, both support the three modes
+Sirius exposes the vector join through two interfaces, a table function and native SQL, and both support all three modes, so they cover the workloads in Section~\ref{subsec:search-to-join} (Table~\ref{tab:vector-join-api}).
+The table function gives more control over how the join executes, most importantly the choice of approximate search, while native SQL runs the queries that users already write for DuckDB without changes.
+
+% explaining TVF
+\input{vector-join-tvf}
+
+The table function, \texttt{sirius\_knn\_join} (Table~\ref{tab:tvf-signature}), takes the probe relation $R$ as its left input and the corpus relation $S$ as its right input, each given as a table and a vector column.
+The remaining arguments are optional and passed by name.
+The join mode follows from the arguments: the join returns the per-row top-$k$ by default, \texttt{eps} selects threshold, and \texttt{join\_mode=>\sq{global}} selects global top-$k$.
+\texttt{metric} chooses L2 or cosine distance, and \texttt{output\_type} returns either a distance or, for cosine, a similarity.
+\texttt{search\_mode} chooses how the join is computed: \texttt{\sq{exact-gemm}} computes distances with GEMM, \texttt{\sq{exact}} computes them directly without GEMM, and \texttt{\sq{approx}} searches an ANN index (Section~\ref{sec:technical-2:-approximate}).
+The arguments \texttt{left\_\allowbreak output\_\allowbreak columns} and \texttt{right\_\allowbreak output\_\allowbreak columns} select the output columns; by default, the output carries only the primary key of each input.
+
+% explaining native SQL syntax
+Native SQL recognizes the vector join in queries that DuckDB already accepts.
+Sirius receives the query plan that DuckDB produces and matches three query shapes as vector joins.
+A \texttt{LATERAL} subquery that orders the corpus by distance to each probe row and keeps the first $k$ rows is a per-row top-$k$ join.
+A cross product of the two tables ordered by distance with a \texttt{LIMIT} of $k$ is a global top-$k$ join.
+A join whose predicate bounds the distance by $\varepsilon$ is a threshold join.
+The distance function sets the metric: \texttt{array\_distance} for L2 and \texttt{array\_cosine\_distance} for cosine.
+Native queries always run the exact join.
+Requesting approximate search from SQL needs new syntax, and the \texttt{NEAREST BY} clause that Spark and DuckDB have recently added (Section~\ref{subsec:similarity-join}) is a natural starting point, which we leave to future work.

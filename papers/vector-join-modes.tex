@@ -1,0 +1,87 @@
+% Note: \end{lstlisting} can't be indented in order to get rid of the padding
+
+% ---- the three modes: table function (top row) and native SQL (bottom row) ----
+\begin{table*}[t]
+    \centering
+    \captionsetup{textfont=normalfont}
+    \caption{
+        Each vector join mode written with the table function (top) and as native SQL (bottom).
+        Highlighted parts select the mode.
+    }
+    \label{tab:vector-join-api}
+
+    % column headers
+    \makebox[1.2em]{}%
+    \begin{minipage}{\dimexpr\textwidth-1.2em\relax}
+        \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=0pt, raster after skip=0pt]
+            \begin{tcolorbox}[blankest, halign=center]\vjhead{vjperrow}{Per-row top-$k$}\end{tcolorbox}
+            \begin{tcolorbox}[blankest, halign=center]\vjhead{vjglobal}{Global top-$k$}\end{tcolorbox}
+            \begin{tcolorbox}[blankest, halign=center]\vjhead{vjthresh}{Threshold}\end{tcolorbox}
+        \end{tcbraster}
+    \end{minipage}
+
+    % row 1: table function
+    \vjrow{TVF}%
+    \begin{minipage}[c]{\dimexpr\textwidth-1.2em\relax}
+        \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=1mm, raster after skip=0pt]
+            \begin{tcolorbox}[vjcard, vjmode=vjperrow]
+                \begin{lstlisting}[style=vj,label={lst:tvf-per-row}]
+SELECT * FROM sirius_knn_join(
+  'R', 'emb', 'S', 'emb',
+  @join_mode => 'per-row', k => 5@,
+  metric => 'l2');
+\end{lstlisting}
+            \end{tcolorbox}
+            \begin{tcolorbox}[vjcard, vjmode=vjglobal]
+                \begin{lstlisting}[style=vj,label={lst:tvf-global}]
+SELECT * FROM sirius_knn_join(
+  'R', 'emb', 'S', 'emb',
+  @join_mode => 'global', k => 5@,
+  metric => 'l2');
+\end{lstlisting}
+            \end{tcolorbox}
+            \begin{tcolorbox}[vjcard, vjmode=vjthresh]
+                \begin{lstlisting}[style=vj,label={lst:tvf-threshold}]
+SELECT * FROM sirius_knn_join(
+  'R', 'emb', 'S', 'emb',
+  @join_mode => 'threshold', eps => 5@,
+  metric => 'l2');
+\end{lstlisting}
+            \end{tcolorbox}
+        \end{tcbraster}
+    \end{minipage}
+
+    % row 2: native SQL
+    \vjrow{Native SQL}%
+    \begin{minipage}[c]{\dimexpr\textwidth-1.2em\relax}
+        \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=1mm, raster after skip=0pt]
+            \begin{tcolorbox}[vjcard, vjmode=vjperrow]
+                \begin{lstlisting}[style=vj,label={lst:sql-per-row}]
+SELECT R.id, nn.id, nn.dist
+FROM R, @LATERAL@ (
+  SELECT S.id,
+    array_distance(R.emb, S.emb) AS dist
+  FROM S
+  @ORDER BY array_distance(R.emb, S.emb)@
+  @LIMIT 5@) nn;
+\end{lstlisting}
+            \end{tcolorbox}
+            \begin{tcolorbox}[vjcard, vjmode=vjglobal]
+                \begin{lstlisting}[style=vj,label={lst:sql-global}]
+SELECT R.id, S.id,
+  array_distance(R.emb, S.emb) AS dist
+FROM R, S
+@ORDER BY dist LIMIT 5@;
+\end{lstlisting}
+            \end{tcolorbox}
+            \begin{tcolorbox}[vjcard, vjmode=vjthresh]
+                \begin{lstlisting}[style=vj,label={lst:sql-threshold}]
+SELECT R.id, S.id,
+  array_distance(R.emb, S.emb) AS dist
+FROM R JOIN S
+  @ON array_distance(R.emb, S.emb) <= 5@;
+\end{lstlisting}
+            \end{tcolorbox}
+        \end{tcbraster}
+    \end{minipage}
+\end{table*}

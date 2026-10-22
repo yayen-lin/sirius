@@ -1,0 +1,27 @@
+% Note: \end{lstlisting} can't be indented in order to get rid of the padding
+
+% ---- TVF signature ----
+\begin{table}[t]
+    \centering
+    \captionsetup{textfont=normalfont}
+    \caption{The Sirius vector join table function.}
+    \label{tab:tvf-signature}
+    \begin{tcolorbox}[vjcard]
+        \begin{lstlisting}[style=vjcolor,label={lst:table-function}]
+sirius_knn_join(
+  left_table,    -- probe table R
+  left_column,   -- vector column of left table
+  right_table,   -- corpus table S
+  right_column,  -- vector column of right table
+  k =>,          -- result size for top-k
+  eps =>,        -- distance bound for threshold
+  metric => ['l2' | 'cosine'],
+  join_mode => ['global' | 'per-row' | 'threshold'],
+  output_type => ['similarity' | 'distance'],
+  search_mode => ['approx' | 'exact' | 'exact-gemm'],
+  left_output_columns =>,  -- default to pk/id (fast path)
+  right_output_columns =>  -- default to pk/id (fast path)
+)
+\end{lstlisting}
+    \end{tcolorbox}
+\end{table}

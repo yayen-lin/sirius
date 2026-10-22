@@ -14,48 +14,17 @@
 
 % new feedback, a table about two api: one TVF and one natural SQL
 
-\section{Vector Join Overview}\label{sec:vector-join-overview}
-
-\andy{i think we should also mention that none of the gpu libraries provide a threshold API, while the workload already exist, and we should argue that the type of join we do is about the same, it's just the reduction phase that need to vary (so this becomes are 3rd arg) ... or maybe not because threshold is a different kernel -> move this to new 3.2}
+\section{Vector Join Execution}\label{sec:vector-join-execution}
 
 \andy{add to future work too: cuDF row limit. That’s a real, unhandled limitation for both modes: top-k when $m_i \times k \times n$ gets large, and threshold when $\varepsilon$ is loose. It doesn’t belong in the figure, but your professor or a reviewer may ask about it. A sentence in a limitations or future-work paragraph is worth considering.
 - and about It also hits cuDF's row limit (about 2.1B) -> this is true for both top-k and threshold, for threshold it could exceed int32 MAX\_INT if threshold is too big, or k is too large, and that's currently not dealt with}
 
 % exact: exhaustive pair-wise comparison
 
-\subsection{Vector Join API}\label{subsec:vector-join-api}
-
-\input{vector-join-api}
-
-% opening, a little deeper into real-world workload aspect
-Sirius exposes the exact vector join through two interfaces, a table function and native SQL, and both support the three modes mentioned in Section~\ref{subsec:vector-join} (Table~\ref{tab:vector-join-api}).
-The table function gives more control over how the join executes, most importantly the choice of approximate search, while native SQL runs the queries that users already write for DuckDB without changes.
-The per-row top-$k$ serves workloads that need the nearest neighbors of every probe row, such as batch retrieval and hard-negative mining, and the threshold join serves workloads that need every pair within a distance bound, such as deduplication and entity resolution (Section~\ref{subsec:the-transition}).
-
-% explaining TVF
-The table function, \texttt{sirius\_knn\_join}, takes the probe relation $R$ as its left input and the corpus relation $S$ as its right input, each given as a table and a vector column.
-The remaining arguments are optional and passed by name.
-The join mode follows from the arguments: the join returns the per-row top-$k$ by default, \texttt{eps} selects threshold, and \texttt{join\_mode=>\sq{global}} selects global top-$k$.
-\texttt{metric} chooses L2 or cosine distance, and \texttt{output\_type} returns either a distance or, for cosine, a similarity.
-\texttt{search\_mode} chooses how the join is computed: \texttt{\sq{exact-gemm}} computes distances with GEMM, \texttt{\sq{exact}} computes them directly without GEMM, and \texttt{\sq{approx}} searches an ANN index (Section~\ref{sec:technical-2:-approximate}).
-By default, the output carries only the primary key of each input, and \texttt{left\_output\_columns} and \texttt{right\_output\_columns} specify the columns in the output.
-
-% explaining native SQL syntax
-Native SQL recognizes the vector join in queries that DuckDB already accepts.
-Sirius receives the query plan that DuckDB produces and matches three query shapes as vector joins.
-A \texttt{LATERAL} subquery that orders the corpus by distance to each probe row and keeps the first $k$ rows is a per-row top-$k$ join.
-A cross product of the two tables ordered by distance with a \texttt{LIMIT} of $k$ is a global top-$k$ join.
-A join whose predicate bounds the distance by $\varepsilon$ is a threshold join.
-The distance function sets the metric: \texttt{array\_distance} for L2 and \texttt{array\_cosine\_distance} for cosine.
-Native queries always run the exact join.
-Requesting approximate search from SQL needs new syntax, and the \texttt{NEAREST BY} clause that Spark and DuckDB have recently added (Section~\ref{subsec:vector-join}) is a natural starting point, which we leave to future work.
-
-\subsection{Reduction Modes}\label{subsec:reduction-modes}
-
 \input{exact-join}
 
-% the three join modes share the distance computation and differ only in the reduction
-All three join modes compute the distance between every probe row and every corpus row, and they differ only in the reduction applied to the resulting $mn$ pairs.
+% the three modes share the distance computation and differ only in the reduction
+All three modes compute the distance between every probe row and every corpus row, and they differ only in the reduction applied to the resulting $mn$ pairs.
 Per-row keeps $k$ pairs for each probe row, global keeps $k$ pairs overall, and threshold keeps every pair within $\varepsilon$.
 Sirius cannot apply this reduction to all $mn$ pairs at once because by its design it partitions both relations into batches during the scan.
 So Sirius computes one pair of a probe batch and a corpus batch at a time and the reduction therefore has two levels: a local reduction within each batch pair, and a global reduction that combines local results into the final answer (Figure~\ref{fig:exact-join}).
@@ -65,7 +34,7 @@ In every mode, Sirius gathers output columns only for pairs that survive the loc
 Per-row returns the $k$ nearest corpus rows for each probe row.
 Within a batch pair, the local reduction keeps a list of $k$ nearest neighbors in that corpus batch for each probe row.
 The global reduction then merges, for each probe row, one list of $k$ candidates per corpus batch into the final $k$.
-With $B$ corpus batches, the merge reads at most $mkB$ candidates instead of $mn$ pairs, and the output has exactly $k$ rows per probe row, or $n$ rows when the corpus has fewer than $k$.
+With $q$ corpus batches, the merge reads at most $mkq$ candidates instead of $mn$ pairs, and the output has exactly $k$ rows per probe row, or $n$ rows when the corpus has fewer than $k$.
 
 \paragraph{Global}
 Global returns the $k$ nearest pairs across the whole join.
@@ -74,8 +43,10 @@ The global reduction is then an ordinary relational top-$N$ over at most $k$ can
 Sirius runs this step with the engine's existing top-$N$ operators.
 
 \paragraph{Threshold}
+\andy{i think we should also mention that none of the gpu libraries provide a threshold API, while the workload already exist, and we should argue that the type of join we do is about the same, it's just the reduction phase that need to vary (so this becomes are 3rd arg) ... or maybe not because threshold is a different kernel -> move this to new 3.2}
 Threshold returns every pair whose distance falls within a radius $\varepsilon$.
 Within a batch pair, the local reduction keeps every pair within $\varepsilon$.
 Whether a pair survives depends only on its own distance, so the global reduction is the union of the local results.
-The output size ranges from zero to $mn$ and depends on the data and on $\varepsilon$, so we implement the local step with our custom kernel.
-The kernel reuses the tiled GEMM of a library brute-force search and replaces its top-$k$ selection with a filter that keeps every pair within $\varepsilon$.
+The output size ranges from zero to $mn$ and depends on the data and on $\varepsilon$.
+Existing libraries do not fit this step: Faiss supports range search only on the CPU, and the range searches in cuVS either compute distances without GEMM, slow down at high dimensions, or leave the caller to tile the batches to keep intermediate results from growing too large.
+We therefore implement the local step with a custom kernel, which reuses the tiled GEMM of a library brute-force search and replaces its top-$k$ selection with a filter that keeps every pair within $\varepsilon$.
