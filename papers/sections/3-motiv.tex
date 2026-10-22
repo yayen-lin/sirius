@@ -1,16 +1,16 @@
 \section{GPU Vector Join}\label{sec:gpu-vector-join}
 
-\yxy{Sec 3.1 currently has significant overlap with Sections 2.2 and 2.3. Here are a few thoughts:\\
-- Section 3 title can probably be something like "GPU Vector Join". Then at the beginning of Sec 3 we can define the term "vector join" and keep using it for the rest of the paper.\\
-- Sec 3.1 summarizes 2.2 and 2.3 and explains Figure 1. Given Sec 2 already explains the details, 3.1 can be much shorter. \\
-- 3.2 we can motivate a GPU-based vector join solution. We should keep Figure 2. The current 3.2 is already a great starting point, but we can make it more concise. For example, we should jump quickly to motivate a GPU-based solution; but the current first paragraph is talking about something else\\
-- maybe add a 3.3 to talk about vector join interface. We can mention both TVF and SQL native syntax.
-}
+%\yxy{Sec 3.1 currently has significant overlap with Sections 2.2 and 2.3. Here are a few thoughts:\\
+%- Section 3 title can probably be something like "GPU Vector Join". Then at the beginning of Sec 3 we can define the term "vector join" and keep using it for the rest of the paper.\\
+%- Sec 3.1 summarizes 2.2 and 2.3 and explains Figure 1. Given Sec 2 already explains the details, 3.1 can be much shorter. \\
+%- 3.2 we can motivate a GPU-based vector join solution. We should keep Figure 2. The current 3.2 is already a great starting point, but we can make it more concise. For example, we should jump quickly to motivate a GPU-based solution; but the current first paragraph is talking about something else\\
+%- maybe add a 3.3 to talk about vector join interface. We can mention both TVF and SQL native syntax.
+%}
 
 % define vector join and its three modes
 A \emph{vector join} is a similarity join between two relations of embeddings that runs inside a SQL engine.
 It is the join of the third stage in Section~\ref{subsec:similarity-join}, and we use this term for the rest of the paper.
-Its three forms are its \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
+Its three forms vary by their reduction \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
 
 \subsection{From Vector Search to Vector Join}\label{subsec:search-to-join}
 
@@ -41,7 +41,7 @@ The per-row top-$k$ mode serves workloads that need the nearest neighbors of eve
 
 % the vector join is a matrix product, so its work is dominated by GEMM
 The vector join is an especially good fit for the GPU, because moving from one query vector to many changes the kind of work the hardware does.
-Under the metrics of Section~\ref{subsec:embeddings-and-vectors}, for two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, r \cdot s$.
+Under the metrics of Section~\ref{subsec:embeddings-and-vectors}, for two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, (r \cdot s)$.
 If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
 The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so when both sides are large, the work is dominated by a dense matrix multiplication (GEMM).
 Columnar engines store a column of embeddings as one contiguous matrix, and the GPU is built to compare one matrix against another.
@@ -59,7 +59,6 @@ We therefore argue that the vector join should run as an operator in a GPU-nativ
 \input{exact-probe-sweep}
 
 % evidence: the GPU's advantage grows as the probe side grows
-\andy{TODO: revisit this, need a new run after the code change, or maybe move get rid of this paragraph and point to evaluation}
 Figure~\ref{fig:exact-probe-sweep} shows this shift on an exact threshold join of $m$ probe rows against Bigann10M\@.
 At $m=1$, the join is a matrix-vector product, and Sirius is only 3.6$\times$ faster than DuckDB\@.
 As $m$ grows, the join becomes a matrix-matrix product, and Sirius's throughput keeps rising until $m=1$K, while DuckDB's levels off by $m=100$.

@@ -16,8 +16,8 @@
 
 \section{Vector Join Execution}\label{sec:vector-join-execution}
 
-\andy{add to future work too: cuDF row limit. That’s a real, unhandled limitation for both modes: top-k when $m_i \times k \times n$ gets large, and threshold when $\varepsilon$ is loose. It doesn’t belong in the figure, but your professor or a reviewer may ask about it. A sentence in a limitations or future-work paragraph is worth considering.
-- and about It also hits cuDF's row limit (about 2.1B) -> this is true for both top-k and threshold, for threshold it could exceed int32 MAX\_INT if threshold is too big, or k is too large, and that's currently not dealt with}
+%\andy{add to future work too: cuDF row limit. That’s a real, unhandled limitation for both modes: top-k when $m_i \times k \times n$ gets large, and threshold when $\varepsilon$ is loose. It doesn’t belong in the figure, but your professor or a reviewer may ask about it. A sentence in a limitations or future-work paragraph is worth considering.
+%- and about It also hits cuDF's row limit (about 2.1B) -> this is true for both top-k and threshold, for threshold it could exceed int32 MAX\_INT if threshold is too big, or k is too large, and that's currently not dealt with}
 
 % exact: exhaustive pair-wise comparison
 
@@ -43,7 +43,6 @@ The global reduction is then an ordinary relational top-$N$ over at most $k$ can
 Sirius runs this step with the engine's existing top-$N$ operators.
 
 \paragraph{Threshold}
-\andy{i think we should also mention that none of the gpu libraries provide a threshold API, while the workload already exist, and we should argue that the type of join we do is about the same, it's just the reduction phase that need to vary (so this becomes are 3rd arg) ... or maybe not because threshold is a different kernel -> move this to new 3.2}
 Threshold returns every pair whose distance falls within a radius $\varepsilon$.
 Within a batch pair, the local reduction keeps every pair within $\varepsilon$.
 Whether a pair survives depends only on its own distance, so the global reduction is the union of the local results.

@@ -1,8 +1,7 @@
 \section{Background}\label{sec:background}
 
 % facts
-\andy{TODO: mention less about CPU as that's less relevant to our work and trim down the section a bit}
-\andy{Update the name to vector join if that's what we decide to use}
+%\andy{mention less about CPU as that's less relevant to our work and trim down the section a bit}
 
 \subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
 
@@ -85,7 +84,7 @@ BigQuery's \texttt{VECTOR\_SEARCH} accepts a whole table of queries in one call~
 Spark 4.2 adds a \texttt{NEAREST BY} clause for the per-row top-$k$ join and evaluates it over the full cross product of its inputs~\cite{ApacheSparkJIRA56395, SparkNearestByJoin26}.
 Databricks, a commercial platform built on Spark, supports the same clause and runs it with a fused operator that computes distances with a custom GEMM kernel~\cite{DatabricksNearestByJoinBlog26}.
 Its approximate join uses an optional IVF index that is built ahead of time so each probe row searches only its nearest clusters.
-DuckDB offers brute-force join macros (\texttt{vss\_join} and \texttt{vss\_match})~\cite{DuckDBVSS}, an \texttt{HNSW\_INDEX\_JOIN} operator that uses an HNSW index on the corpus table in place of a cross product~\cite{DuckDBVSSBlog24}, and recently a \texttt{NEAREST BY} clause~\cite{DuckDBNearestByPR24137}.
+DuckDB offers brute-force join macros (\texttt{vss\_join} and \texttt{vss\_match})~\cite{DuckDBVSS} and an \texttt{HNSW\_INDEX\_JOIN} operator that uses an HNSW index on the corpus table in place of a cross product~\cite{DuckDBVSSBlog24}, and recently a \texttt{NEAREST BY} clause~\cite{DuckDBNearestByPR24137}.
 Recent algorithmic work targets approximate joins at the scale of modern embedding workloads~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26} (Section~\ref{sec:related}).
 
 \subsection{GPU-Accelerated Data Processing}\label{subsec:gpu-data-processing}
@@ -108,4 +107,4 @@ Lieberman et al.\ sorted one input along space-filling curves and searched the c
 The SQL engines and recent algorithms in Section~\ref{subsec:similarity-join} run the join on the CPU, and to our knowledge, no SQL engine runs the similarity join on the GPU\@.
 The rest of this paper shows why and how to run the join on the GPU as an operator inside a SQL engine.
 
-\yxy{We probably can add a Sec 2.4 to talk about background in GPU-accelerated data processing, both SQL and vector search, and point out that there is no GPU-accelerated similarity join.}
+%\yxy{We probably can add a Sec 2.4 to talk about background in GPU-accelerated data processing, both SQL and vector search, and point out that there is no GPU-accelerated similarity join.}
