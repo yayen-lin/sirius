@@ -16,6 +16,12 @@
 
 \section{Vector Join Execution}\label{sec:vector-join-execution}
 
+\yxy{Section 4 can just be the last subsection in Section 3, should be more concise.}
+
+\yxy{also need to discuss the following in this section:
+Conventional joins can be implemented in different ways, such as nested-look join (NLJ), block NLJ, index NLJ, hash join etc. Vector join also have corresponding implementations in each category. We will focus on two variants: our exact vector join is a block NLJ, which works on small data but cannot scale to large data sets. Then our approx vector join is similar to a partitioned hash join, which can scale to much larger data sets. Also, Table 3 can be moved here.
+}
+
 %\andy{add to future work too: cuDF row limit. That’s a real, unhandled limitation for both modes: top-k when $m_i \times k \times n$ gets large, and threshold when $\varepsilon$ is loose. It doesn’t belong in the figure, but your professor or a reviewer may ask about it. A sentence in a limitations or future-work paragraph is worth considering.
 %- and about It also hits cuDF's row limit (about 2.1B) -> this is true for both top-k and threshold, for threshold it could exceed int32 MAX\_INT if threshold is too big, or k is too large, and that's currently not dealt with}
 

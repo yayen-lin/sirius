@@ -3,6 +3,8 @@
 % facts
 %\andy{mention less about CPU as that's less relevant to our work and trim down the section a bit}
 
+\yxy{need a short transition parargaph}
+
 \subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
 
 % what embeddings/vectors are, and the metrics that compare them
@@ -13,6 +15,7 @@ Comparing two objects semantically therefore reduces to computing a distance or 
 All three can be computed from dot products and vector norms (Section~\ref{subsec:why-gpu}).
 We use the terms \emph{embedding} and \emph{vector} interchangeably.
 
+\yxy{we need space to need to shrink. generally the writing can be more concise. For the paragraph below, maybe don't list the system names to save space. }
 % how they are integrated into databases, explicit vs implicit
 Relational databases store embeddings as a column.
 Some systems add a dedicated \texttt{VECTOR} type with a declared dimension, as in pgvector~\cite{PgvectorRepo}, Snowflake~\cite{SnowflakeVector}, SQL Server~\cite{SQLServer2025Vector}, and MySQL~\cite{MySQLHeatWaveVector}, while others reuse an existing array type, as in DuckDB~\cite{DuckDBVSS}, ClickHouse~\cite{ClickHouseVSS}, BigQuery~\cite{BigQueryVectorSearchFn}, and Databricks~\cite{DatabricksNearestByJoinBlog26}.
@@ -24,6 +27,8 @@ PostgreSQL and DuckDB provide it only through extensions, such as pg\_vectorize~
 In either form, the embeddings reach the execution engine as a column of fixed-length vectors, and similarity computation becomes an ordinary relational operation.
 
 \subsection{Vector Search}\label{subsec:vector-search}
+
+\yxy{both sections 2.2 and 2.3 can be shrunk aggressively. We need the background section to be at most 1.5 pages. Start with shrinking contents that are more tangential to our contributions.}
 
 % what a vector search is, and how it is written in SQL
 A vector search takes one query vector and returns its top-$k$ nearest neighbors from a dataset under a chosen distance metric.

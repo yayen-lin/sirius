@@ -8,11 +8,14 @@
 %}
 
 % define vector join and its three modes
-A \emph{vector join} is a similarity join between two relations of embeddings that runs inside a SQL engine.
-It is the join of the third stage in Section~\ref{subsec:similarity-join}, and we use this term for the rest of the paper.
+A \emph{vector join} is a similarity join between two relations of embeddings that runs inside a SQL engine, and we use this term for the rest of the paper.
 Its three forms vary by their reduction \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
 
+\yxy{in general, we should merge Sections 3 and 4.}
+
 \subsection{From Vector Search to Vector Join}\label{subsec:search-to-join}
+
+\yxy{To save space, maybe we fold Section 3.1 into other sections. For example, a lot of the points can be folded into Section 2. Also, for Figure 1 maybe just a simpler graph with four quadrants: index search, join, vector search, vector join. }
 
 \input{quadrant}
 
@@ -39,6 +42,7 @@ The per-row top-$k$ mode serves workloads that need the nearest neighbors of eve
 
 \subsection{Why the GPU}\label{subsec:why-gpu}
 
+\yxy{we can use quantitative metrics to show how compute intensive vector join is and how GPU and tensor cores are so much better than CPU for this type of computation. This section also should be much shorter. We can keep figure 2.}
 % the vector join is a matrix product, so its work is dominated by GEMM
 The vector join is an especially good fit for the GPU, because moving from one query vector to many changes the kind of work the hardware does.
 Under the metrics of Section~\ref{subsec:embeddings-and-vectors}, for two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, (r \cdot s)$.
@@ -62,9 +66,10 @@ We therefore argue that the vector join should run as an operator in a GPU-nativ
 Figure~\ref{fig:exact-probe-sweep} shows this shift on an exact threshold join of $m$ probe rows against Bigann10M\@.
 At $m=1$, the join is a matrix-vector product, and Sirius is only 3.6$\times$ faster than DuckDB\@.
 As $m$ grows, the join becomes a matrix-matrix product, and Sirius's throughput keeps rising until $m=1$K, while DuckDB's levels off by $m=100$.
-The speedup grows with it, to 106$\times$ at $m=10$K, and the per-row top-$k$ join shows the same pattern.
 
 \subsection{Vector Join Interface}\label{subsec:vector-join-interface}
+
+\yxy{try to be more concise. }
 
 \input{vector-join-modes}
 

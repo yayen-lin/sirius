@@ -1,0 +1,19 @@
+\section{Related Work}\label{sec:related}
+
+\paragraph{Similarity joins}
+Section~\ref{subsec:vector-join} traces the similarity join from spatial joins to SQL engines.
+Recent work targets approximate joins over learned embeddings on the CPU: SimJoin joins two vector sets under a threshold over proximity graphs and argues, as we do, that a join should not run as one search per probe row~\cite{XieSimJoin25}; DiskJoin runs a billion-scale threshold join from an SSD with probabilistic pruning~\cite{ChenDiskJoin25}; and Kim et al.\ co-design an offline and an online phase~\cite{KimVectorJoin26}.
+These are standalone algorithms with approximate answers.
+Semantic deduplication is a similarity self-join: SemDeDup compares rows only within their k-means cluster~\cite{AbbasSemDeDup23}, which is our approximate join with $n_p=1$ (Table~\ref{tab:join-analogy}), SieveIVF prunes the pairs an IVF index need not compare~\cite{HuSieveIVF26}, and NeMo Curator runs SemDeDup in production~\cite{NeMoCurator}.
+
+\paragraph{Vector joins in SQL engines}
+DuckDB, Spark, Databricks and BigQuery express vector joins in SQL, through brute-force macros, HNSW or IVF indexes, a \texttt{NEAREST BY} clause or a table of queries, and run them on the CPU as a per-row top-$k$~\cite{DuckDBVSS, DuckDBVSSBlog24, DuckDBNearestByPR24137, SparkNearestByJoin26, DatabricksNearestByJoinBlog26, BigQueryVectorSearchFn}.
+MaxVec adds a two-input vector-search operator to a CPU--GPU relational engine~\cite{MaxVec26}.
+It searches an index once per probe row, an index nested-loop join (Table~\ref{tab:join-analogy}), and finds that with current indexes GPU search does not pay off; its Vec-H benchmark is the source of our SQL workload.
+Sirius instead plans the join over the whole probe side at once, as a nested-loop or a hash join, and adds threshold and global top-$k$ joins.
+
+\paragraph{GPU vector search and GPU databases}
+FAISS, cuVS and IVF-RaBitQ build and search brute-force, IVF and graph indexes on the GPU~\cite{JohnsonFaissGPU21, NvidiaCuVS26, OotomoCAGRA24, ShiIVFRaBitQ26}, and Milvus and Kinetica use GPU search inside a database~\cite{MilvusGPUIndex, KineticaVectorSearch}; Section~\ref{subsec:vector-search} covers research systems.
+All of them answer independent searches with a per-row top-$k$: cuVS has a threshold search only in C++, as a dense boolean matrix, and none has a global top-$k$.
+Section~\ref{sec:exact-join} compares our kernel with fused distance-and-selection kernels~\cite{JiFlyKNNG22}, lossy fp16 distances~\cite{CurlessFaSTED25} and probabilistic bounds over quantized codes~\cite{GaoRaBitQ24}.
+GPU relational joins go back to He et al.~\cite{HeGPUJoins08} and partitioned hash joins to GRACE~\cite{KitsuregawaGrace83}; we add a vector join to a GPU SQL engine~\cite{Yogatama26} and build its approximate form as a partitioned hash join.

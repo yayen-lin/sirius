@@ -1,23 +1,81 @@
+% =====================================================================================================
+% Introduction.
+%   P1 vectors are a default data type (major SQL systems, ANN indexes)
+%   P2 the vector join: term, definition, applications, the similarity-join lineage and its new challenges
+%   P3 like a relational join, but far more compute-intensive
+%   P4 key insight: a near-perfect fit for the GPU (unlike vector search); we build it in Sirius
+%   P5 contributions: define, design (exact, approximate), integrate, evaluate
+%   P6 headline results   P7 roadmap
+% Numbers are quoted from Section 8 (commit 49c758d); update them together with Section 8 and the abstract.
+% Vec-H runs with Sirius's codes built by an earlier statement, so "charged for what it builds" applies to
+% the library comparisons only. Earlier, longer version: drafts/intro_proposal_2026-10-22.tex.
+% =====================================================================================================
+
 \section{Introduction}\label{sec:introduction}
 
-% will come back and visit this section because it's the summary of the paper, for now just put bullet points on what we wanna talk about
+% P1: vectors are a default data type
+Vectors have become a standard data type in modern databases.
+Embedding models turn unstructured data such as text and images into vectors whose distances reflect semantic similarity. Today, nearly every major database system, relational or dedicated vector database, stores vectors in columns and answers search queries, usually through an approximate nearest neighbor (ANN) index~\cite{PgvectorRepo, OracleAIVectorSearch, SQLServer2025Vector, SQLServerVectorIndex, MySQLHeatWaveVector, SnowflakeVector, BigQueryVectorSearch, AlloyDBScaNN, ClickHouseVSS, DuckDBVSS, WangMilvus21, PineconeDocs}.
+A vector extension is also under way for the SQL standard~\cite{EisentrautSQL202y25}.
 
-\yxy{very rough intro outline. needs refinement and expansion.}
+% P2: the vector join
+Beyond vector search, which answers one query vector at a time, a growing class of workloads relates two columns of vectors, from the same or different tables.
+Following recent work~\cite{KimVectorJoin26}, we call this operation a \textit{vector join}.
+Given two vector columns, a vector join returns the pairs of rows whose vectors are close, indicated by top-$k$ or a distance threshold;
+it can be viewed as a \textit{batched vector search} but the implementation can be very different.
+Vector join is the underlying algorithm for the semantic deduplication of training data~\cite{AbbasSemDeDup23, HuSieveIVF26, NeMoCurator}, entity resolution~\cite{SantanaEMJoin25, SantanaRibeiro23}, and offline recommendation and retrieval~\cite{HuangFBRetrieval20, XiongANCE21}. Databricks recently reports that a good share of the vector search workloads on its platform are of this batch kind~\cite{DatabricksNearestByJoinBlog26}.
+SQL engines have also started to expose vector joins directly, through a \texttt{NEAREST BY} clause~\cite{SparkNearestByJoin26, DatabricksNearestByJoinBlog26} or a vector search function that accepts a whole table of queries~\cite{BigQueryVectorSearchFn}.
+The vector join is the latest chapter in the long history of similarity joins, which began in spatial and multidimensional databases~\cite{BrinkhoffSpatialJoin93, ShimSimJoin97, BohmKrebsKNNJoin04}.
+% (Section~\ref{subsec:vector-join}).
+% Joining learned embeddings, however, brings its own concrete challenges: the vectors have hundreds to thousands of dimensions, the inputs are database tables that can exceed memory, and the join is one step of a larger SQL query.
 
-- vector is becoming a default datatype in modern database systems. It enables new use cases.
+% P3: a join, but far more compute-intensive
+A vector join resembles a relational join (e.g., equi-join), but the unique data type changes how it works.
+Vectors match by similarity rather than equality, and computing a similarity is far more expensive than comparing two keys: it takes one multiply-add per dimension and hundreds of dimensions per vector pair.
+%Similar to a relational join, a vector join can be executed in a similar fashion as a nested-loop join, an index nested-loop join, or a hash join (Table~\ref{tab:join-analogy}).
+% and algorithms that prune pairs or search approximate indexes reduce the work~\cite{XieSimJoin25, ChenDiskJoin25, KimVectorJoin26}.
+While algorithmic innovations can help reduce the computation complexity of a vector join, it remains far more compute-intensive than a conventional join and a major performance challenge.
 
-- most existing vector databases focus on vector search. which is great but limited to point requests.
+% P4: the key insight
+Our key insight is that the vector join is a perfect fit for the GPU.
+Under the common metrics, a distance is a dot product plus vector norms, so a many-to-many vector comparison is a dense matrix multiplication (GEMM). This is exactly the operation that GPU tensor cores are built. % for and execute at a far higher rate than CPUs.
+Note that vector search does not share the same property: a vector search is a matrix-vector product and is usually latency-bound. % rather than throughput-bound. 
+% Accordingly, a recent study finds that the GPU pays off for vector search only once the index is reorganized to move less data~\cite{MaxVec26}.
+A vector join instead reuses vectors in one table across many rows of the other table, and is throughput-bound.
+%; the more rows in the join, the better it fits the GPU.
+To show the feasibility and potential of this idea, we implement and optimize vector join as a new operator in Sirius, a state-of-the-art GPU-native analytics engine~\cite{Yogatama26}.
 
-- we are seeing a growing trend of vector join.
+% P5: contributions
+In this paper, we study the GPU vector join end to end.
+We first \emph{define} the vector join operator, its different variants (global top-$k$, local top-$k$, or threshold-based), and the APIs for SQL integration.
+%and discuss its APIs, and expose it through a table function and through plain SQL that existing queries already use (Section~\ref{sec:vector-join-overview}).
+We then design two implementations of vector join on GPU.
 
-- compared to vector search, vector join has several unique characteristics:
+\noindent\textbf{Exact vector join.}
+The exact join is a blocked nested-loop join that computes distance for every pair of vectors. We leverage GPU tensor cores for high performance.
+% yet writes almost none of them to memory (Section~\ref{sec:exact-join}).
+We develop three more optimizations make it fast. \yxy{TODO for the following. Revisit after writing the technical sections.}
+It multiplies 1- and 2-byte codes of the vectors rather than fp32 values, which runs on the fastest tensor-core formats; it filters pairs inside the GEMM kernel against a per-row bound, so that only a few hundred candidates per row leave the chip instead of every distance; and it seeds that bound from a sample of the corpus and tightens it as the scan proceeds.
+Because each code's error is measured when the code is built, the bound is deterministic, and re-scoring the surviving pairs in fp32 returns the exact answer.
 
-+ very compute extensive.
+\noindent\textbf{Approximate vector join.}
+For large datasets, exact vector join fails to scale due to the pairwise distance calculation. Following the classic idea of Grace hash join~\cite{KitsuregawaGrace83}, the approximate vector join algorithm co-partitions both input tables into clusters and perform per-cluster vector joins to avoid all-to-all distance calculation.
+Unlike a hash join, it partitions the data through $k$-means clustering rather than by hashing a key. We further allow each probe vector to join with $n_p$ nearest build clusters to improve accuracy.
+The clustering happens wihin the vector join operator and requires no pre-built indexes.
 
-+ indexes should be built at query execution time, in the same way that hash index are built at query execution time in OLAP engines.
+\noindent\textbf{System integration.}
+As an operator of Sirius, the vector join inherits the engine's memory management and query planning.
+For example, it supports tables that are larger than GPU memory through the buffer management and spilling mechanism in Sirius.
+Vector joins can also compose with the rest of a SQL plan like a relational join; for example, it can benefit from join reordering, filter pushdown, and other query optimization techniques.
 
-+ hopefully a third one so it looks nicer :-)
+\yxy{rewrite the following paragraph after we finalize the eval section}
+Finally, we \emph{evaluate} the joins against GPU vector-search libraries, a GPU database with vector operators, a production deduplication pipeline, and DuckDB (Section~\ref{sec:evaluation}).
+On one 24\,GB GPU, Sirius runs SQL statements with vector joins over Vec-H~\cite{MaxVec26} 48--1\,700$\times$ faster than DuckDB on the CPU and 3.4--3.6$\times$ faster than MaxVec on the GPU.
+Against GPU libraries, with every system charged for what it builds, the exact join is 5.9--7.8$\times$ faster than FAISS-GPU's exact search at 10k probe rows on 1M to 100M rows, and the approximate join is faster than all five GPU indexes we compare at every recall from 0.90.
+On semantic deduplication of 5.87M CLIP embeddings, Sirius is 4.0$\times$ faster end to end than NeMo Curator, at higher recall.
 
-- we believe GPU is a better platform for vector join compared to CPU due to the reasons above. Furthermore, the vector join pattern can be accelerated using tensor cores on GPU.
-
-- We built xxxxx [explain the technical contributions]
+% P7: roadmap
+The rest of the paper is organized as follows.
+Section~\ref{sec:background} gives background on embeddings, vector search, and similarity joins, and Section~\ref{sec:motivation} motivates running vector joins on the GPU.
+Section~\ref{sec:vector-join-overview} introduces the vector join operator and its API, and Sections~\ref{sec:exact-join} and~\ref{sec:approx-join} present the exact and approximate joins.
+Section~\ref{sec:integration} describes their integration into Sirius, Section~\ref{sec:evaluation} evaluates them, Section~\ref{sec:related} discusses related work, and Section~\ref{sec:conclusion} concludes.

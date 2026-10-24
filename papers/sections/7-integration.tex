@@ -1,0 +1,62 @@
+\section{System Integration}\label{sec:integration}
+
+Both joins run as one physical operator in Sirius, a GPU-native SQL engine that runs inside DuckDB~\cite{Yogatama26}.
+DuckDB parses and optimizes a query, and Sirius executes the plan on the GPU.
+Sirius's engine holds data as batches in three memory tiers: GPU memory, pinned host memory, and disk.
+When a tier fills, the engine moves batches to the next tier down.
+This section describes how the vector join uses these tiers, and how the optimizer plans the join.
+
+\subsection{Inputs Larger than GPU Memory}\label{subsec:integration-ooc}
+
+\yxy{this subsection reads a bit weird. not sure what's going on.}
+
+\paragraph{Codes in host memory}
+Codes and partitions stay on the GPU when they fit with a quarter of the GPU left for the join over them.
+Otherwise they are kept in pinned host memory as ordinary engine batches, one batch per chunk of rows.
+The join copies each chunk it needs to the GPU, still coded, on a stream of its own, so that the next chunk's copy overlaps the current chunk's work.
+Nothing per corpus row stays on the GPU.
+Each chunk's row norms travel with its codes, and the map to row ids is read from host memory only for candidates.
+
+\paragraph{A corpus read by the join's own scan}
+A corpus that was not loaded ahead of time is read by the join's own scan of the table, which codes each chunk to fp16 on the GPU as it arrives and puts the chunk's rounding error into the bound of Section~\ref{subsec:exact-codes}.
+The engine may also move scanned batches to disk, from which the join reads them back; we do not evaluate the disk tier here.
+
+\paragraph{Probe blocks}
+Probe blocks set how often a corpus outside GPU memory is read.
+A chunk crosses PCIe in every task that joins it, so $m$ probe rows in blocks of $b$ read the corpus $\lceil m/b\rceil$ times.
+Over a corpus in host memory or on disk, a task therefore takes a \emph{probe block}: probe rows cut from the scan's batches, as many as a third of the GPU holds.
+The join is then a block nested-loop join with the corpus as the inner input, which it reads once per sweep of a block.
+The block's answer is split back into one piece per scanned batch, so the rest of the plan sees the batches it scanned.
+
+\paragraph{Self-joins}
+When both inputs are plain scans of the same table and vector column, the plan scans the table once.
+The probe side reads the corpus scan's batches, so the table is held once in memory and on disk.
+
+\subsection{Planning the Join}\label{subsec:integration-plan}
+
+\paragraph{Native SQL}
+
+\yxy{first say vector join is very similar to regular join within a query plan. So most query planning and optimization techniques apply to vector join and conventional join in the same way.}
+
+A vector join written in plain SQL reaches Sirius inside DuckDB's optimized plan, in one of the three shapes of Section~\ref{subsec:vector-join-api}.
+Sirius replaces the shape with the join operator and keeps the relational subtree that DuckDB built below the corpus, such as filters, joins and subqueries.
+It rewrites every expression above the join that reads a distance to read the join's score.
+A plan that it cannot prove equivalent is left to DuckDB's CPU operators.
+No data leaves the engine.
+
+\paragraph{Access path}
+DuckDB's estimate of the probe rows sizes what the join builds.
+An exact join with very few probe rows, too few to repay the code build, skips it and joins the fp32 rows directly; an approximate join takes its partition count from the estimate (Section~\ref{subsec:approx-build}).
+Codes and partitions stay for the session, so a wrong estimate costs at most one statement, and the cost model is calibrated to the GPU at hand by a cached microbenchmark.
+
+\paragraph{Join order}
+A similarity predicate may sit beside a band predicate on a scalar column, such as two prices within 1\,\%.
+DuckDB then joins on the band and filters the pairs by similarity.
+Sirius estimates the band's selectivity from column statistics and orders the two joins by cost.
+The vector join goes first unless the band keeps so few pairs that DuckDB's cost for them is below the GEMM's (Section~\ref{subsec:eval-planner}).
+
+\paragraph{Aggregates inside the join}
+A \texttt{count(*)} directly over a threshold join is computed in the kernel's epilogue, which counts the pairs within each row's bound and emits none.
+A threshold join may also keep only each probe row's best match and report each pair of a self-join once.
+The join then folds its candidates into one (distance, row) per probe row and re-scores only the candidates that can still win.
+A deduplication rule thus becomes one join, where a search API needs a top-2 join and a filter.

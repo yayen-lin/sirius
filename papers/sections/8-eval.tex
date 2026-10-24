@@ -1,0 +1,178 @@
+\section{Evaluation}\label{sec:evaluation}
+
+We compare the two joins with GPU vector-search libraries, a GPU database with vector operators, a production deduplication pipeline, and DuckDB, and find:
+\yxy{the list is too verbose. In fact, I'm not sure this list helps a reader. We have a lot of report and it's hard to summarize the key points into a short bullet list. Maybe we remove the list here.}
+\begin{itemize}\setlength{\itemsep}{1pt}
+    \item The exact join is at least 5.9$\times$ faster than FAISS-GPU's exact search at 10k probe rows, from 1M to 100M corpus rows, with its codes built inside the statement (Section~\ref{subsec:eval-exact}).
+    \item With every build charged, the approximate join is faster than every GPU index at every recall from 0.90; only a CAGRA graph built ahead of time is faster, and only for small probe sides (Section~\ref{subsec:eval-approx}).
+    \item Under GPU memory caps where no cuVS index runs, the approximate join still joins 100M rows (Section~\ref{subsec:eval-approx}).
+    \item Inside SQL statements, Sirius is at least 3.4$\times$ faster than the GPU alternatives on every statement they run, and it deduplicates 4.1$\times$ faster than NeMo Curator, at higher recall (Sections~\ref{subsec:eval-sql} and~\ref{subsec:eval-selfjoin}).
+\end{itemize}
+
+\subsection{Setup}\label{subsec:eval-setup}
+
+\begin{table}[t]
+    \centering\scriptsize
+    \setlength{\tabcolsep}{2.5pt}
+    \begin{tabular}{@{}llrrrl@{}}
+        \toprule
+        dataset & rows $\times$ dim & values & fp32 & probe rows & start \\
+        \midrule
+        SIFT1M & 1M $\times$ 128 & bytes & 0.5\,GB & 10k & GPU \\
+        GIST1M & 1M $\times$ 960 & float & 3.8\,GB & 1k & GPU \\
+        Deep10M & 10M $\times$ 96 & float & 3.8\,GB & 1k--10M & GPU \\
+        SIFT100M (BigANN) & 100M $\times$ 128 & bytes & 51\,GB & 10k--10M & host \\
+        Deep100M & 100M $\times$ 96 & float & 38\,GB & 10k--10M & host \\
+        DataComp-small & 5.87M $\times$ 768 & float & 18\,GB & self-join & storage \\
+        Vec-H reviews & 2.4M $\times$ 1024 & float & 9.8\,GB & statement & GPU \\
+        Vec-H main images & 197k $\times$ 1152 & float & 0.9\,GB & statement & GPU \\
+        \bottomrule
+    \end{tabular}
+    \caption{Datasets. Bytes: integer values 0--255. Probe rows: each set's public queries (10k; GIST1M 1k); larger probe sides are further rows of the same collection. Start: where the raw vectors are when a statement begins.}
+    \label{tab:datasets}
+\end{table}
+
+\paragraph{Hardware and systems}
+Every experiment runs on an NVIDIA RTX A5000 (24\,GB, sm\_86, capped at 200\,W) with 24 CPU cores and 240\,GB of host memory; all machines are of this type.
+The exact join is compared with the two exact GPU searches: FAISS-GPU 1.14.1's flat search~\cite{JohnsonFaissGPU21} and cuVS 26.02's fp32 brute force~\cite{NvidiaCuVS26}.
+The approximate join is compared with five GPU indexes: FAISS-GPU's IVF index, cuVS's IVF-PQ and CAGRA (26.02), and cuVS's IVF-SQ and IVF-RaBitQ (26.08)~\cite{OotomoCAGRA24, ShiIVFRaBitQ26}.
+At 100M rows the raw vectors do not fit on the GPU but every index does once built, so the libraries build from host memory and search on the device.
+Each library index is built over a grid of its build parameters (for example 256 to 65\,536 lists and graph degrees 16 to 64) and searched over its search parameters, and for each recall target we take each system's cheapest configuration; Sirius's partition counts from 256 to 16\,384 are swept the same way.
+Table~\ref{tab:datasets} lists the datasets; each stresses a different part of the join: byte values (SIFT1M), wide rows with few probe rows (GIST1M), a corpus ten times larger that still fits on the GPU (Deep10M), and corpora that do not (the 100M sets).
+
+\yxy{try to make below more concise. Some section-specific configs can be discussed only in that section.}
+\paragraph{Accounting}
+A vector join builds what it needs inside the statement, as a hash join builds its hash table, so we charge every system its build.
+For Sirius we charge the k-means fit, the code or partition build, and the join; for a library, the index build and the search; FAISS's flat search has no build.
+Sirius scans its probe rows inside the statement, and the libraries receive theirs in host memory for free.
+We call this \emph{build included}, and we say so where codes or an index already exist.
+Loading from storage and start-up in a fresh process are excluded for every system, except in the deduplication comparison (Section~\ref{subsec:eval-selfjoin}), which times both systems from process start; Section~\ref{subsec:eval-limits} gives the effect of charging Sirius's first join.
+Sirius's times are medians over three to five processes, except the recall sweeps (Figures~\ref{fig:frontier} and~\ref{fig:prebuilt}), which take one run per configuration, and the capped-memory runs, which take the fastest of their repetitions.
+FAISS-GPU's flat search reports its best of three runs after a warm-up, each configuration of a library index is searched once, and NeMo Curator reports the faster of its runs on two machines.
+Recall is recall@10, and $k{=}10$ except in the paragraph on larger $k$ (Section~\ref{subsec:eval-exact}).
+
+\subsection{Exact Join}\label{subsec:eval-exact}
+
+\input{figs-eval/fig_exact}
+
+\yxy{first tell a reader what figure to read; then explain the figure a little bit. }
+Sirius's exact join is 5.9--7.8$\times$ faster than FAISS-GPU's flat search at 10k probe rows, from SIFT1M's 1M corpus rows to Deep100M's 100M, with its codes built inside the statement (Figure~\ref{fig:exact}).
+The margin comes from never writing a distance and from multiplying 1- or 2-byte codes; the ablation below separates the two.
+It narrows only where the code build weighs more: GIST1M has only 1k public queries (2.6$\times$), and at 100M rows the build is about half of Sirius's time, because it copies the rows from host memory to the GPU.
+DuckDB runs the same join, as a plain SQL \texttt{LATERAL} statement on 24 CPU threads, about three orders of magnitude slower; in Sirius the same statement is 5.8$\times$ faster than FAISS-GPU on Deep10M.
+\yxy{cleanup writing. Try to focus on more interesting and important observations in the figures. In fact, maybe we can fold Figure 7 into Figure 5 by adding Sirius without your optimizations.}
+
+Every answer is exact: for every probe row, no distance in Sirius's answer exceeds the corresponding distance in the published ground truth, recomputed in fp64, and ids differ only between rows at equal distance.
+
+\input{figs-eval/fig_exact_probes}
+
+Figure~\ref{fig:exact-probes} varies the probe side on Deep10M.
+Every system's time grows linearly with the probe rows, as an exact join's must, so the figure shows where the margin settles: at 1k probe rows the code build is a third of Sirius's time, and from 10k on it is amortized and Sirius stays about 7$\times$ faster than FAISS-GPU.
+At 1M probe rows the exact join takes 40\,s, and the approximate join of Section~\ref{subsec:eval-approx} takes over.
+
+\paragraph{Larger $k$}
+Because the seed's sample grows with $k$ (Section~\ref{subsec:exact-bound}), the margin holds beyond $k{=}10$: on Deep10M the exact join is 6.7$\times$ faster than FAISS-GPU's flat search at $k{=}100$ and 5.4$\times$ at $k{=}1\,000$, with exact answers up to $k{=}2\,048$.
+On SIFT1M and GIST1M, whose distance work is small, it narrows to 1.8$\times$ and 1.3$\times$ at $k{=}1\,000$, because returning the result rows and handling the pairs that pass the filter, both of which grow with $k$, take most of Sirius's time.
+
+\paragraph{Where the speed comes from}\label{subsec:eval-ablations}
+
+\input{figs-eval/fig_ablation}
+
+Figure~\ref{fig:ablation} takes the exact join apart on Deep10M, one mechanism of Section~\ref{sec:exact-join} at a time.
+Writing every distance and then selecting each row's top-$k$ costs the same in fp32 and fp16 (Figure~\ref{fig:ablation}a), because the time goes to writing and re-reading $10^{11}$ distances, not to the multiplication; this is what FAISS-GPU's flat search does.
+Filtering in the GEMM's epilogue removes that traffic and makes the fp16 join 7.4$\times$ faster, and only then do narrower codes pay: int8 adds another 1.7$\times$, with the dense kernel at about 36\,\% of the GPU's measured int8 peak.
+The filter is only as good as its bound (Figure~\ref{fig:ablation}b): the 1\,024-row seed and the lowering between pieces make it 3.2$\times$ and 2.8$\times$ faster, nearly as fast as a filter given the final bound.
+The approximate join reuses the kernel and gains 2.8$\times$ from the filter at 1M probe rows (Figure~\ref{fig:ablation}c).
+
+int8 is not the default because one scale per column fails on skewed data.
+With Deep10M's first component scaled by 20, the rotation keeps the int8 join 17$\times$ faster than without it; scaled by 300, even the rotated codes let so many pairs pass that the join takes 8.99\,s, against 0.97\,s with fp16.
+
+\subsection{Approximate Join}\label{subsec:eval-approx}
+
+\input{figs-eval/fig_probes}
+\input{figs-eval/fig_frontier}
+
+With every build charged, the approximate join is the fastest system at every probe count, and its lead grows with the probe side (Figure~\ref{fig:probes}): every IVF index is at least 1.7$\times$ slower at 10k probe rows and at least 2.7$\times$ slower at 1M, and CAGRA, whose graph build takes minutes, is slower still.
+Figure~\ref{fig:frontier} shows the same order at every recall from 0.90, as do SIFT1M and GIST1M; the narrowest margin is 1.1$\times$, over IVF-RaBitQ on SIFT1M at recall 0.90.
+
+Two effects explain the shape of the curves.
+At 10k probe rows the build decides: on the 100M sets Sirius builds its partitions faster than any library builds its index, and CAGRA's graph build is itself a neighbor search over every corpus row, which a join of 10k probe rows does not need.
+As the probe side grows the search decides: an IVF index reads each list once for every probe row that visits it, whereas Sirius reads each partition once per probe block (Section~\ref{subsec:approx-join}).
+The same effect makes large joins affordable: the dashed line in Figure~\ref{fig:probes}a is Sirius's exact join, and at 1M probe rows the approximate join returns 97\,\% of the exact answer in 2.8\,s against 40\,s.
+
+\paragraph{An index that already exists}
+\input{figs-eval/fig_prebuilt}
+When the index is already built, an index nested-loop join over it can be the cheaper plan, as it is for relational data.
+Figure~\ref{fig:prebuilt} charges only the search, with every index and Sirius's partitions prebuilt.
+CAGRA's search then matches the join at 10k probe rows on Deep10M and is 2.0--2.8$\times$ faster on the 100M sets; at 1M probe rows the two are within 1.6$\times$ of each other.
+Every IVF index's search stays slower than the join, by at least 1.7$\times$ at 10k probe rows and 3.5$\times$ at 1M, for the reason above.
+A graph index earns its build when it serves many statements with few probe rows each; choosing between it and the partitioned join from what the catalog holds is future work (Section~\ref{sec:conclusion}).
+
+\paragraph{Limited GPU memory}
+\input{figs-eval/fig_ooc}
+With less GPU memory than its partitions need, the approximate join slows gradually, and no cuVS index runs at all below the largest cap (Figure~\ref{fig:ooc}).
+We cap the memory the engine may use on Deep100M, as a smaller GPU would, below the 10.8\,GB of its 16\,384 int8 partitions, and build every system's partitions or index ahead of time so that all run under the same cap.
+Sirius keeps the partitions that do not fit in host memory and streams them to the GPU once per probe block (Section~\ref{subsec:integration-ooc}): at caps of 4.8, 2.4 and 1.2\,GB a join of 1M probe rows slows by 1.7$\times$, 2.3$\times$ and 6.7$\times$.
+A GPU index must be on the device while it searches, so IVF-PQ runs only at the 4.8\,GB cap, with its most compact index, and is 2.5$\times$ slower than Sirius there at recall 0.95; CAGRA runs under none of the caps.
+
+\subsection{Vector Join in Complex SQL Queries}\label{subsec:eval-sql}
+
+\input{figs-eval/lst_vech}
+\input{figs-eval/fig_sql}
+
+Vec-H extends TPC-H at scale factor 1 with tables of product reviews and product images, with embeddings of 1\,024 and 1\,152 dimensions~\cite{MaxVec26}; our statements join the 2.4M reviews and the 196\,824 main product images.
+Its own queries search with one query vector, so we wrote seven join statements over its tables.
+QF, QJ and QE put a vector join inside a TPC-H plan: reviews that echo a complaint, brands with similar reviews, and products for unhappy buyers.
+J1--J3 join two sets of embeddings: near-duplicate images, the reviews of two supplier groups, and recommendations for 94k reviews.
+QB joins images on both a similarity and a 1\,\% price band.
+Each statement runs unchanged in DuckDB and in Sirius, and Sirius rewrites every one into its join; Figure~\ref{fig:vech-sql} shows two of them.
+
+Sirius is the fastest system on every statement (Figure~\ref{fig:sql}a).
+The closest is a pipeline that runs the probe side in DuckDB, the join in cuVS with the corpus already on the GPU, and the rest in DuckDB again; Sirius is at least 3.5$\times$ faster on the four top-$k$ statements, without charging the pipeline the 26\,s it takes to export the corpus from DuckDB.
+Both run an exact join on the GPU, so much of the margin is the hand-off between systems: on J2, the smallest statement, DuckDB's export of the two inputs takes 0.46 of the pipeline's 0.50\,s.
+
+MaxVec, a GPU database with vector-search operators, keeps the tables in host memory on our 24\,GB GPU; its own evaluation uses GPUs with four times the memory.
+Sirius is 3.4--3.6$\times$ faster on the two statements MaxVec runs on its GPU, and up to 71$\times$ faster on the four it runs on its CPU, because its GPU indexes have no range search (QF, J1) and its GPU plan rejects the aggregates of J2 and J3.
+
+Stock DuckDB on 24 CPU threads is three to four orders of magnitude slower on most statements; the exceptions are J2, whose join is small (48$\times$), and QB, where DuckDB joins on the price band first (Section~\ref{subsec:eval-planner}).
+Figure~\ref{fig:sql}b shows why: wherever DuckDB's plan keeps the vector join separate, the join is nearly all of its time (97--100\,\%), whereas the subqueries that feed the join take milliseconds in both systems.
+
+The answers agree with DuckDB's up to fp32 rounding.
+On all 1\,744 probe rows of QJ the top-5 similarities match within $10^{-5}$, and 85 rows pick other rows at equal similarity.
+Both systems compare a similarity with a threshold in fp32, so a pair within rounding of it may fall on either side: Sirius keeps a few pairs of QB at 0.89999982, which DuckDB drops.
+
+\subsection{Deduplication against NeMo Curator}\label{subsec:eval-selfjoin}
+
+\input{figs-eval/fig_dedup}
+
+Semantic deduplication removes a row whose most similar other row passes a cosine threshold, a standard step in cleaning training data~\cite{AbbasSemDeDup23}.
+NeMo Curator, NVIDIA's pipeline for it~\cite{NeMoCurator}, clusters the rows with k-means and compares rows within each cluster on the GPU; Sirius runs the rule as one threshold self-join that keeps each row's best match (Section~\ref{subsec:integration-plan}).
+We use the 5.87M CLIP embeddings of DataComp-small, 18\,GB in fp32 on a 24\,GB GPU, and time each system from process start to the list of rows to remove.
+
+Sirius is 4.1$\times$ faster and finds more of the duplicates (Figure~\ref{fig:dedup}).
+Most of the gap is NeMo Curator's framework: starting its process and its Ray cluster and orchestrating actors between its stages take about 49\,s.
+The work itself is closer: more than half of NeMo Curator's stage time is unified-memory paging, because the 18\,GB table does not fit on the device beside its index, and without the paging its work takes as long as Sirius's, 21\,s.
+What the same work buys differs: Sirius finds 0.997 of the duplicate pairs and NeMo Curator 0.959, because NeMo Curator compares rows only within a cluster and misses pairs that straddle clusters; its configuration that finds the most pairs (0.964) takes 126.5\,s.
+Keeping only each row's best match (Section~\ref{subsec:integration-plan}) widens the margin to 6.3$\times$.
+
+\subsection{Planner Decisions}\label{subsec:eval-planner}
+
+\input{figs-eval/fig_planner}
+
+The planner makes three decisions (Section~\ref{subsec:integration-plan}): whether an exact join builds its codes or joins the fp32 rows directly, how many partitions an approximate join builds, and whether a vector join or a band join goes first.
+Figure~\ref{fig:planner} runs each decision against the plan it rejected, for the first statement in a process, where a wrong choice costs the most.
+The planner picks the faster plan in 7 of 10 cases, and its three misses cost at most 10\,\%.
+\emph{Codes or fp32 rows}: building codes pays from 1k probe rows on Deep10M; the two misses are SIFT1M at 1k probe rows and Vec-H's QJ, where codes make the first statement up to 9\,\% slower but every later statement over 3$\times$ faster, because the codes stay for the session.
+\emph{Partition count}: among the counts that reach recall 0.96, the rule picks the fastest at 10k probe rows and one that is 10\,\% slower than the fastest at 1M.
+\emph{Join order}: on QB, the vector-join-first plan is 87$\times$ faster than the band-first plan, which turns the similarity into a filter after the band join and therefore runs on DuckDB's CPU.
+One order is not the planner's to choose: a relational filter written outside the join's subquery runs after the join, and with a filter that keeps 0.06\,\% of the reviews that is 1.9$\times$ slower than filtering first.
+
+\subsection{Limitations}\label{subsec:eval-limits}
+
+The first join in a process costs Sirius about 0.16\,s more than later ones.
+Charged to Sirius alone, this lowers its margin over FAISS-GPU at 10k probe rows to 4.8$\times$ on Deep10M and 1.6$\times$ on SIFT1M, and makes FAISS-GPU faster on GIST1M's 1k probe rows (0.8$\times$).
+Beyond that, the join's reach is narrower than a library's in three ways.
+It runs on one GPU.
+Its int8 codes cover at most 256 dimensions, so wider columns use fp16.
+And it rewrites only the SQL shapes it recognizes: \texttt{arg\_max} over the join's output, ordering by inner product or by largest distance, and a predicate that asks for dissimilar pairs fall back to DuckDB's CPU plan, and the best-match join (Section~\ref{subsec:integration-plan}) is reached only through the table function.
+Finally, codes and partitions are rebuilt, not maintained, when a table changes.
