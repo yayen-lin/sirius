@@ -1,5 +1,6 @@
 %\yxy{add more details to the figure to make it more interesting, like example systems (only the most important ones)}}
 % new feedback, make it more colorful, instead of showing example systems, show a short description
+% latest feedback: just four quadrants, index search, join, vector search, vector join
 \begin{figure}
     \centering
     % one hue, darker down and to the right to show both progressions
@@ -7,28 +8,24 @@
     \begin{tikzpicture}[
         font=\small\sffamily,
         cell/.style={draw=accent!85!black, fill=accent!#1, rounded corners=2pt, line width=0.8pt,
-        minimum width=2.5cm, minimum height=1.4cm, align=center,
+        minimum width=2.5cm, minimum height=1.0cm, align=center,
         font=\small\sffamily\bfseries},
         open/.style={cell=#1, dashed, line width=1.1pt},
         ax/.style={font=\small\sffamily\bfseries, align=center},
         flow/.style={-{Latex[length=2.2mm]}, thick, black!55},
     ]
 
-        % columns: relational, vector; rows: OLTP, CPU OLAP, GPU OLAP
-        \node[cell=10] (r1) at (0,0)        {70s--80s\\[2pt] {\scriptsize\mdseries Oracle, PostgreSQL,}\\ {\scriptsize\mdseries MySQL, SQL Server}};
-        \node[cell=28] (r2) at (0,-2.0)  {$\sim$mid-1990s\\[2pt] {\scriptsize\mdseries Snowflake, BigQuery,}\\ {\scriptsize\mdseries Databricks, DuckDB}};
-        \node[cell=46] (r3) at (0,-4.0)  {2010s\\[2pt] {\scriptsize\mdseries Sirius, Theseus,}\\ {\scriptsize\mdseries HeavyDB, Kinetica}};
-        \node[cell=20] (v1) at (3.6,0)      {late 2010s\\[2pt] {\scriptsize\mdseries Milvus, Pinecone,}\\ {\scriptsize\mdseries pgvector, Oracle}};
-        \node[cell=40] (v2) at (3.6,-2.0) {2024\\[2pt] {\scriptsize\mdseries Databricks, Spark,}\\ {\scriptsize\mdseries BigQuery, DuckDB}};
-        \node[open=62] (v3) at (3.6,-4.0) {this work\\[2pt] {\scriptsize\mdseries Sirius}};
+        % columns: relational, vector; rows: OLTP, OLAP
+        \node[cell=10] (r1) at (0,0)     {Index search};
+        \node[cell=36] (r2) at (0,-1.6)  {Join};
+        \node[cell=24] (v1) at (3.6,0)   {Vector search};
+        \node[open=62] (v2) at (3.6,-1.6) {Vector join};
 
         % arrows
         \draw[flow] (r1) -- (r2);
-        \draw[flow] (r2) -- (r3);
         \draw[flow] (v1) -- (v2);
-        \draw[flow] (v2) -- (v3);
         \draw[flow] (r1) -- (v1);
-        \draw[flow] (r3) -- (v3);
+        \draw[flow] (r2) -- (v2);
 
         % column axis (x)
         \node[ax, anchor=south] at ([yshift=3pt]r1.north) {Relational};
@@ -36,10 +33,9 @@
 
         % row axis (y)
         \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r1.west) {OLTP};
-        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r2.west) {CPU\\OLAP};
-        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r3.west) {GPU\\OLAP};
+        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r2.west) {OLAP};
     \end{tikzpicture}
     \captionsetup{textfont=normalfont}
-    \caption{Vector data follows relational data's path from OLTP to GPU OLAP.}
+    \caption{Search and join over relational and vector data.}
     \label{fig:quadrant}
 \end{figure}

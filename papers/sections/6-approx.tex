@@ -1,70 +1,53 @@
-\section{Approximate Join}\label{sec:technical-2:-approximate}\label{sec:approx-join}
+\section{Approximate Vector Join}\label{sec:technical-2:-approximate}\label{sec:approx-join}
 
-The exact join drops almost every pair inside the kernel, but it still computes every pair.
-A join of 10k probe rows with 100M corpus rows of 128 dimensions is $1.3\times10^{14}$ multiply-adds whatever the bound.
+The exact vector join, as a block nested loop join, must compute every vector pair in the inputs, so its cost grows with $N^2$.
 Relational engines face the same problem with large inputs, and they answer it with join algorithms that never compare most pairs.
 Table~\ref{tab:join-analogy} lists the classic algorithms next to their vector counterparts.
 
-\begin{table}[t]
-    \centering\footnotesize
-    \setlength{\tabcolsep}{3pt}
-    \begin{tabular}{@{}p{0.17\columnwidth}p{0.43\columnwidth}p{0.33\columnwidth}@{}}
-        \toprule
-        \raggedright relational join & \raggedright vector counterpart & \raggedright examples \tabularnewline
-        \midrule
-        \raggedright block nested loop & \raggedright compare every probe tile with every corpus tile & \raggedright Sirius exact join (\S\ref{sec:exact-join}), Databricks \texttt{NEAREST BY}~\cite{DatabricksNearestByJoinBlog26}, DuckDB \texttt{vss\_join}~\cite{DuckDBVSS} \tabularnewline
-        \raggedright index nested loop & \raggedright one search of a prebuilt index per probe row & \raggedright FAISS~\cite{JohnsonFaissGPU21}, cuVS~\cite{NvidiaCuVS26}, DuckDB HNSW join~\cite{DuckDBVSSBlog24}, MaxVec~\cite{MaxVec26} \tabularnewline
-        \raggedright hash join & \raggedright partition the corpus at query time, route each probe row to its $n_p$ nearest partitions & \raggedright Sirius approximate join (this section), SemDeDup~\cite{AbbasSemDeDup23} \tabularnewline
-        \bottomrule
-    \end{tabular}
-    \caption{Relational join algorithms and their vector counterparts.}
-    \label{tab:join-analogy}
-\end{table}
-
-A vector-search library answers a join as an index nested-loop join, which pays off, as for relational data, when the index already exists and the probe side is small.
-Our approximate join is a hash join whose hash function is k-means: it partitions the corpus at query time and sends each probe row to its nearest partitions (Figure~\ref{fig:hash-vs-approx}).
+An index library answers a join as an index nested-loop join, which pays off, as for relational data, when the index already exists and the probe side is small.
+Modern OLAP warehouses and lakehouses rarely rely on such indexes, since a join often runs on intermediate results over which no index can be prebuilt; we follow the same observation and build the approximate join as a co-partitioned hash join.
+Our approximate join is instead a partitioned hash join in the manner of GRACE~\cite{KitsuregawaGrace83}: it partitions both inputs at query time by one function, k-means over the build side, and joins each build partition with the probe rows that fall into it (Figure~\ref{fig:hash-vs-approx}).
+It departs from a hash join in one place.
+A probe row falls into its $n_p$ nearest partitions rather than one, because its nearest neighbors can lie just across a partition boundary.
 
 \input{hash-vs-approx}
 
-\subsection{Build: Partitioning the Corpus}\label{subsec:approx-build}
+Figure~\ref{fig:hash-vs-approx} shows the idea.
+A hash join partitions both inputs by a hash of the key and joins each pair of matching partitions.
+The vector join has no key, so it partitions by k-means: it clusters the build side into $N$ partitions, each around a \emph{centroid}, and sends each probe row to the partitions whose centroids are nearest.
+Each partition is small enough to join on the GPU in one task, so the join becomes $N$ small exact joins, and a probe row's nearest neighbors are found unless they lie in a partition it does not visit.
+The three subsections follow the three steps: partitioning the build side, routing the probe side, and joining partition by partition.
 
-\yxy{we use the word corpus a lot. Isn't this term more specific to vector search? Is it better to call it build table vs. probe table instead?}
+\subsection{Partitioning the Build Table through K-means}\label{subsec:approx-build}
 
-Sirius partitions the corpus inside the statement that needs the partitions, as a hash join builds its table.
+Sirius partitions the build side inside the statement that needs the partitions, as a hash join builds its table.
 It samples 256 rows per centroid, or fewer when that sample does not fit beside what the GPU already holds, and fits cuVS's balanced k-means, the one its IVF indexes use~\cite{NvidiaCuVS26}.
 The k-means is balanced because a partition is the unit of work below, and a few oversized partitions would leave most of the GPU idle.
-Sirius then assigns every corpus row to its nearest centroid.
-This assignment is a per-row top-1 join of the corpus with the centroids, which Sirius runs with the bounded kernel of Section~\ref{subsec:exact-kernel}.
-Finally it writes the corpus in partition order, one contiguous run per partition, coded as in Section~\ref{subsec:exact-codes}, with a map back to the row ids.
+Sirius then assigns every build row to its nearest centroid.
+This assignment is a per-row top-1 join of the build side with the centroids, which Sirius runs with the bounded kernel of Section~\ref{subsec:exact-kernel}.
+Finally it writes the build side in partition order, one contiguous run per partition, coded as in Section~\ref{subsec:exact-codes}, with a map back to the row ids.
 The partitions stay in the session for later statements.
 
-The number of partitions $N$ trades build time for join time.
-Sirius starts from $N_{\mathrm{ref}}=\sqrt{n}$, at most 1\,024, and considers its doublings up to $16N_{\mathrm{ref}}$ that leave at least 256 rows per partition.
-It picks the count with the smallest estimated build plus join cost for the estimated number of probe rows (Section~\ref{subsec:integration-plan}).
+The number of partitions $N$ trades build time for join time: the fit and the assignment grow with $N$, and the join's work per probe row, $n_p$ partitions of $n/N$ rows each, falls with it.
+Sirius picks $N$ with a cost model that prices the build (k-means fit, assignment, writing the partitions) and the join (bytes read and multiply-adds performed, at rates measured once per GPU) for DuckDB's estimate of the probe rows, over the candidates $N_{\mathrm{ref}}=\lfloor\sqrt{n}\rfloor$, at most 1\,024, and its doublings up to $16N_{\mathrm{ref}}$ with at least 256 rows per partition (Section~\ref{subsec:integration-plan}).
 A plain-SQL join is exact by default; a user asks for an approximate answer with \texttt{SET vector\_join\_probes = }$n_p$, as with pgvector's \texttt{ivfflat.probes}.
-Sirius scales $n_p$ by $\sqrt{N/N_{\mathrm{ref}}}$, because recall follows $n_p/\sqrt{N}$ empirically: on Deep10M, one setting keeps recall@10 between 0.956 and 0.964 for every count from 256 to 16\,384.
+The user's $n_p$ is read at $N_{\mathrm{ref}}$ partitions: at $N$ partitions the join probes $n_p\sqrt{N/N_{\mathrm{ref}}}$, because recall follows $n_p/\sqrt{N}$ empirically, and on Deep10M one setting keeps recall@10 between 0.956 and 0.964 for every count from 256 to 16\,384.
+\yxy{I find it hard to understand this paragraph. In general, we need more text on the more intuitive algorithmic design---these are what a reader need to understand and we need to help them understand---then we can discuss less on the underlying details.}
 
-\subsection{Probe: Routing Each Probe Row\yxy{maybe more like co-partitioning the probe table?}}\label{subsec:approx-probe}
+\subsection{Probe: Co-Partitioning the Probe Side}\label{subsec:approx-probe}
 
-Routing is again a join: probe rows are multiplied with the $N$ centroids in one GEMM\yxy{it's actually a smaller vector join. We chose to implement it using GEMM but that's one implementation decision, not the only one. should clarify}, and a per-row top-$n_p$ keeps each row's $n_p$ nearest partitions.
-Sorting the resulting (probe row, partition) pairs by partition gives one \emph{slice} per partition: the partition and every probe row routed to it.
-Here the vector join departs from an equi-join.
-A probe row visits $n_p$ buckets instead of one, because its nearest neighbors can lie just across a partition boundary.
+The probe side is partitioned by the same centroids.
+Finding each probe row's $n_p$ nearest centroids is itself a small vector join, of $m$ probe rows with $N$ centroids; Sirius runs it as one GEMM and a per-row top-$n_p$, though any method that finds a row's nearest centroids would do.
+Sorting the resulting (probe row, partition) pairs by partition gives one \emph{slice} per partition: the partition and every probe row routed to it, with each probe row appearing in $n_p$ slices.
 A row of the answer is missed only when its partition is not among those its probe row visits.
 So $n_p$ trades recall for time, and $n_p=N$ returns the exact answer.
 
 \subsection{Join: Each Partition Once}\label{subsec:approx-join}
 
-\yxy{my current understanding is: after co-partitioning, we simply divide the original vector join problem into 1024 (or whatever the number is) smaller vector join problems that hopefully fits in GPU memory.
-We can use any vector join algorithm to tackle this small vector join. In our current implementation, we decide to use our exact vector join algorithm to implement it. But it's possible to improve this in future work.}
+After co-partitioning, the join is $N$ independent small joins, one per slice, and any vector join algorithm could run them.
+Sirius runs each slice as an exact join with the kernel of Section~\ref{sec:exact-join}, so the codes and the bound lose nothing and the answer equals the exact join restricted to the probed partitions: routing is the only approximation, and every reduction of Section~\ref{sec:vector-join-execution} carries over.
 
-Each slice is a small exact join, run with the kernel of Section~\ref{sec:exact-join}.
-A partition is read once per batch of probe rows and multiplied in one GEMM with every probe row of the batch routed to it, whereas an index nested-loop join reads it once for every probe row that visits it; with 10k probe rows, 256 partitions and $n_p=8$, each read serves about 300 probe rows.
-FAISS's \texttt{big\_batch\_search} processes an IVF search list by list in the same order~\cite{DouzeFaiss24}; Sirius makes this order the join's plan.
-
-\yxy{is below the same optimization as already discussed in exact join section? If so, no need to repeat since we are just reusing our exact join for per-partition join.}
-Routing also supplies the bound.
-A first sweep joins each probe row with its nearest partition, and the $k$-th distance found there, re-scored in fp32, seeds the row's bound (Section~\ref{subsec:exact-bound}).
-A second sweep runs the bounded kernel over every routed slice and lowers each row's bound as its slices finish.
+\yxy{I don't quite understand this paragraph. Why compare with indexed NLJ here? }
+Joining partition by partition, rather than probe row by probe row as an index search does, is what makes the join cheap at large probe sides: a partition is read once per probe block and multiplied in one GEMM with every probe row routed to it, so with 10k probe rows, 256 partitions and $n_p=8$ each read serves about 300 probe rows, where a search reads the partition once per probe row (FAISS's \texttt{big\_batch\_search} walks an IVF index in this order for the same reason~\cite{DouzeFaiss24}).
+The bound of Section~\ref{subsec:exact-bound} also carries across the small joins: a first sweep joins each probe row with its nearest partition only, and the $k$-th distance found there seeds the row's bound for its other $n_p-1$ slices, which lower it further as they finish.
 Slices too small to pay for a kernel launch of their own are launched together.
-The codes and the bound lose nothing, so the answer equals the exact join restricted to the probed partitions: routing is the only approximation, and every reduction of Section~\ref{subsec:reduction-modes} carries over.

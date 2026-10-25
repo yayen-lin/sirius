@@ -1,80 +1,88 @@
 \section{Exact Vector Join}\label{sec:exact-join}
 
-\yxy{no need to mention vector search to introduce exact vector join. Explain it as a block nested loop join.}
-Exact vector search compares a query with every corpus row: it computes all the distances and then selects the nearest.
-GPU libraries answer a join as a batch of such searches, and at the scale of a join almost all of that work is wasted, because the distances fill hundreds of gigabytes for an answer of a few hundred thousand pairs.
-This section starts from that algorithm (Section~\ref{subsec:exact-algo}) and removes its waste in three steps: the join never writes a distance (Section~\ref{subsec:exact-kernel}), it filters with a bound that tightens as it scans (Section~\ref{subsec:exact-bound}), and it filters on 1- or 2-byte codes while still returning the exact answer (Section~\ref{subsec:exact-codes}).
+The exact vector join is a blocked nested-loop join: it compares every probe row with every build row and keeps the pairs the reduction asks for.
+Section~\ref{subsec:exact-algo} walks through the overall algorithm. % as shown in Figure~\ref{fig:exact-join}. % draws it and shows where its time goes: not in the distance computation, but in writing a distance for every pair and reading it back, when the answer keeps about one pair in a million.
+The rest of the section describes optimizations to exact vector join to further improve its performance without giving up exactness in the answer.
+%The join compares each distance with a per-row limit while the distance is still in registers and writes only the pairs within the limit (Section~\ref{subsec:exact-kernel}); it starts each row's limit near its final value and tightens it as the scan proceeds (Section~\ref{subsec:exact-bound}); and it computes the distances it compares from 1- or 2-byte codes, widening the limit by the codes' known error so that the fp32 answer is unchanged (Section~\ref{subsec:exact-codes}).
+%Throughout, $R$ is the probe side with $m$ rows and $S$ the build side with $n$ rows, both of $d$ dimensions, as in Section~\ref{sec:vector-join-execution}.
 
-\subsection{The Basic Algorithm}\label{subsec:exact-algo}
+\subsection{The Blocked Nested-Loop Join}\label{subsec:exact-algo}
 
-\yxy{this subsection should focus on explaining Figure 3. Especially the right part, since that's the key building block that the whole paper is built on top of. Also, don't repeat contents already discussed in previous sections.}
+\yxy{this subsection needs a cleanup after Sections 1-4 are polished.}
 
-The exact join is a blocked nested-loop join over batches of the two inputs (Figure~\ref{fig:exact-join}, Section~\ref{subsec:reduction-modes}): each task joins one probe batch with one corpus batch, computes the distance of every pair (Step~1), and keeps the pairs the reduction asks for (Step~2).
-Since $\lVert r-s\rVert^2=\lVert r\rVert^2+\lVert s\rVert^2-2\,r\cdot s$ and each row's norm is computed once, Step~1 needs the dot product of every probe row with every corpus row.
-Laid out as a table with one row per probe row and one column per corpus row, these dot products are exactly the matrix product of the probe batch and the transposed corpus batch, so Step~1 is one GEMM per pair of batches, which tensor cores execute in hardware; cosine similarity is the same product over unit-length rows.
 
-Run the way a search library runs it, Step~1 writes all $mn$ distances to GPU memory and Step~2 reads them back to keep $k$ per probe row; FAISS-GPU's flat search works this way, tile by tile.
-For 10k probe rows and a 10M-row corpus, the distances fill 400\,GB in fp32 for an answer of 100k pairs.
+
+Both inputs reach the join as \emph{batches}, the engine's unit of a table, and each \emph{task} joins one probe batch $R_i$ with one build batch $S_j$ (Figure~\ref{fig:exact-join}); up to $T$ tasks run at once, and inside a task the kernel works on \emph{tiles} of $128\times128$ pairs.
+Step~1 computes the distance of every pair in the task.
+Since $\lVert r-s\rVert^2=\lVert r\rVert^2+\lVert s\rVert^2-2\,r\cdot s$ and each row's norm is computed once, what Step~1 needs is the dot product of every probe row with every build row; laid out with one row per probe row and one column per build row, these dot products are the matrix product $R_iS_j^\top$.
+So Step~1 is one GEMM per task, the operation tensor cores execute in hardware, and cosine similarity is the same product over unit-length rows.
+Step~2a reduces the task's pairs as the mode asks, keeping $k$ per probe row, $k$ per task, or every pair within $\varepsilon$, and Step~2b merges the tasks' results into the answer.
+
+Figure~\ref{fig:exact-join} draws Step~2a as a selection over the task's distances, and run that way the join is what a search library does: Step~1 writes all $mn$ distances to GPU memory and Step~2a reads them back.
+FAISS-GPU's flat search works this way, tile by tile~\cite{JohnsonFaissGPU21}.
+The traffic, not the arithmetic, is the cost: for 10k probe rows and a 10M-row build side the distances fill 400\,GB in fp32 for an answer of 100k pairs, and the join takes the same time whether the GEMM runs in fp32 or in fp16 (Section~\ref{subsec:eval-ablations}).
+Sirius therefore performs Step~2a inside Step~1, as the next three subsections describe.
 
 \subsection{Filtering Inside the GEMM}\label{subsec:exact-kernel}
 
-\yxy{first explain the problem/opportunity, why the basic algorithm falls short, then explain the highlevel idea of the proposed solution, then finally jump into details.}
+\yxy{I don't think this is an "optimization" since we don't seem to have a baseline without this optimization. In other words, this technique is more of a algorithmic design decision, rather than an add-on optimization that can be turned off. Therefore, I suggest merging it into Section 5.1. This part of the basic exact vector join designs. We can do this after section 5.1 is polished.}\duke{the write-then-select baseline exists and is Figure 7's first row (3.0 s vs 0.75 s with the filter on the same fp32 rows). whether 5.2 merges into 5.1: your call.}
+The idea is that a distance has to be compared with only one number to decide whether its pair can be in the answer.
+For a per-row top-$k$ that number is any upper bound on the probe row's $k$-th distance; for a threshold join it is $\varepsilon$.
+So the join gives the kernel a \emph{limit} $L_r$ per probe row: over exact codes the row's \emph{bound} $b_r$ itself, an upper bound on its $k$-th distance (Section~\ref{subsec:exact-bound}), and over lossy codes that bound widened by their error (Section~\ref{subsec:exact-codes}).
+When a tile's dot products are complete, still in the registers of the threads that computed them, the kernel compares each pair's distance with its row's limit and appends only the pairs within it, as (row, build row, distance) triples, to a candidate buffer.
+No distance is written for the rest.
+Launches are issued in groups, and after each group the join reads how many candidates it produced, re-scores them in fp32 where the distances came from codes (Section~\ref{subsec:exact-codes}), and merges them into each probe row's running top-$k$; a threshold join returns them.
+A group that overflows the buffer is rolled back and its launches replayed one at a time, after the buffered candidates have been merged, which tightens the limits; a single launch that still overflows gets a larger buffer.
 
-\yxy{right now, I cannot understand this subsection.}
-
-The first step removes that traffic: the join never writes a distance.
-When a tile's dot products are complete, they are still in the registers of the threads that computed them.
-Sirius's kernel compares each pair's distance there with a limit $L_r$ for the pair's probe row and appends only the pairs within it to a candidate buffer.
-For a per-row top-$k$, $L_r$ is an upper bound on the probe row's $k$-th distance (Section~\ref{subsec:exact-bound}); for a threshold join it is $\varepsilon$.
-
-Search kernels fuse the selection too: cuVS's \texttt{fusedL2Knn} keeps a running top-$k$ per query inside a CUDA-core kernel for $k\le64$~\cite{NvidiaCuVS26}, and flyKNNG selects the top-$k$ on tensor cores on the fly~\cite{JiFlyKNNG22}.
+\yxy{there is general problem in the current writing: the logic flow is not always progressive. For example, the first sentences below are not closely related logically. Maybe you can say: the kernel fusing idea above is similar to existing work in vector search, such as ... Try to keep a "\textit{linear progression of logic}" in general.}
+Fusing the selection into the distance kernel is how search libraries avoid the same traffic: cuVS's \texttt{fusedL2Knn} keeps a running top-$k$ per query inside the kernel for $k\le64$~\cite{NvidiaCuVS26}, and flyKNNG selects the top-$k$ on tensor cores on the fly~\cite{JiFlyKNNG22}.
 Both keep the selection's state inside the kernel, which fits one batch of queries searched in one pass.
-A join needs more: every reduction, any $k$, a corpus that arrives in pieces from host memory or disk, and thousands of partitions joined one by one.
-Sirius therefore moves the state out of the kernel.
-The kernel only compares each distance with a number it is given, and the join decides what that number is.
-This makes the kernel a stateless filter that every part of the join reuses: the exact join, each partition of the approximate join (Section~\ref{sec:technical-2:-approximate}), and corpus chunks streamed from host memory or disk (Section~\ref{sec:integration}).
-It is also what lets the filter tighten its bound between calls (Section~\ref{subsec:exact-bound}) and run on lossy codes (Section~\ref{subsec:exact-codes}).
-The kernel is otherwise a standard tensor-core GEMM: each thread block keeps one probe tile in the L2 cache, walks the corpus tiles, and copies the next tile's operands into shared memory while the current one is multiplied.
-\yxy{although I don't quite understand this subsection, but it sounds like describing a simpler kernel as the building block. If so, shouldn't this be merged into Section 5.1? }
+A join needs that state to survive across pieces of a build side that arrives from host memory, across the thousands of partitions of Section~\ref{sec:approx-join}, and across its three reductions, so Sirius keeps the state in the join and the kernel keeps none of its own: it is a filter that is told its limits.
+The same kernel then serves every part of the join, and the join can tighten the limits between launches (Section~\ref{subsec:exact-bound}) and widen them for lossy codes (Section~\ref{subsec:exact-codes}).
 
-\subsection{A Bound That Tightens\yxy{needs better title}}\label{subsec:exact-bound}
+The three reductions differ only in the limit.
+A threshold join sets every row's limit to $\varepsilon$ and never changes it; its \texttt{count(*)} is taken in the kernel without emitting a pair (Section~\ref{subsec:integration-plan}).
+A global top-$k$ runs the per-row search to depth $k$ and hands the per-row answers to the engine's top-$N$, since the $k$ nearest pairs overall are among the $k$ nearest of their probe rows.
+Otherwise the kernel is a standard tensor-core GEMM: each thread block owns one $128\times128$ tile of probe rows, walks the build tiles, and stages the next tile's operands into shared memory while the current one is multiplied.
 
-\yxy{this subsection is more understandable, but still not easy to follow for a general reader. Try to improve clarity further.}
-The filter helps only if its limit is close to the answer.
-The ideal limit for a per-row top-$k$ is the distance to the probe row's true $k$-th neighbor, which is what the join is computing; a loose limit lets through almost every pair, and the join is back to writing distances.
-Sirius therefore starts each probe row with a bound near the answer and tightens it as the corpus is scanned.
+\subsection{Progressive Bound Tightening}\label{subsec:exact-bound}
+
+\yxy{Here is my understanding of the idea now: Our basic kernel takes a distance bound as input. We can adaptively/dynamically update the bound based on kernels that have already executed to reduce the output size. I guess this works only for global or per-row top-K? since for threshold the bound won't change? The title can probably something like: Dynamic (or Progressive?) Bound Tightening}\duke{yes: only the two top-$k$ modes; a threshold join's bound is $\varepsilon$ throughout. title changed as suggested.}
+
+The filter helps only if its limit is close to the answer, and the limit follows the bound $b_r$.
+The ideal bound for a per-row top-$k$ is the distance to the row's true $k$-th neighbor, which is what the join is computing, and a loose one lets almost every pair through: unseeded, the filter is slower than writing every distance (Section~\ref{subsec:eval-ablations}).
+Sirius therefore starts each probe row's bound near its final value and lowers it as the build side is scanned.
+
+The tightening has two phases: a \emph{seed} gives each probe row a bound before the scan, and \emph{lowering} brings it down as the scan proceeds.
+
 
 \paragraph{Seed}
-Before the scan, each probe row's bound $b_r$ is set to its $k$-th smallest distance over a sample of corpus rows, taken from the whole corpus in the exact join and from the probe row's nearest partition in the approximate join (Section~\ref{subsec:approx-probe}).
-The sample has 1\,024 rows or $8k$, whichever is more, so the seed stays near the answer as $k$ grows.
-Any $k$ corpus rows give an upper bound on the $k$-th neighbor's distance, so the seed never excludes a row of the answer.
+Before the scan, each probe row's bound $b_r$ is set to its $k$-th smallest distance over a sample of build rows: the first 1\,024 rows of the codes, or eight times $k$ rows when that is more, so that the seed stays near the answer as $k$ grows; in the approximate join the sample comes from the probe row's nearest partition (Section~\ref{subsec:approx-join}).
+Any $k$ build rows give an upper bound on the $k$-th neighbor's distance, so the seed never excludes a row of the answer.
 
 \paragraph{Lowering}
-The corpus is scanned in pieces that double in size, so a corpus of $n$ rows takes $O(\log n)$ pieces.
-After each piece, the pairs that passed are re-scored, merged into each probe row's running top-$k$, and the bound is lowered to the current $k$-th distance.
-The first piece is sized so that the pairs passing it under the seed fit the candidate buffer; after a few pieces the bound is close to the final one, and each later piece passes about $k$ pairs per probe row.
-Codes in host memory have no rows on the GPU to sample, so there the first piece runs without a bound and serves as the sample.
-
-\paragraph{Other reductions}
-A threshold join uses $\varepsilon$ as every row's bound and never lowers it.
-A global top-$k$ runs the per-row search to depth $k$ and passes the per-row answers to the engine's top-$N$, since the $k$ nearest pairs overall are among the $k$ nearest of their probe rows.
-A count over a threshold join is taken in the kernel itself (Section~\ref{subsec:integration-plan}).
+The build side is scanned in \emph{pieces}, runs of rows after each of which the bound is updated; the pieces double in size, so $n$ rows take $O(\log n)$ of them.
+After each piece, the candidates that passed are re-scored and merged into each probe row's running top-$k$, and the bound is lowered to the current $k$-th distance.
+Under the seed about $k$ of every 1\,024 rows pass, so the first piece is cut so that its candidates fit a buffer of $2^{24}$ pairs; after a few pieces the bound is close to the final one, and each later piece passes about $k$ pairs per probe row.
+Codes in host memory have no rows on the GPU to sample, so there the first piece, cut to the same $2^{24}$ pairs, runs without a bound and its $k$-th distances serve as the seed.
 
 \subsection{Exact Answers from Compact Codes}\label{subsec:exact-codes}
 
-Once no distance is written, the multiplications are what remain, and they run in fp32 for every pair although almost every pair is discarded.
-Tensor cores multiply narrow types much faster: on our GPU, fp16 at several times the fp32 rate and int8 at twice the fp16 rate.
-Sirius therefore runs the filter on 1- or 2-byte codes of the rows instead of the fp32 rows.
+
+Once no distance is written, the dense GEMM is the join's dominant cost, and it runs in fp32 for every pair although almost every pair is discarded.
+Tensor cores multiply narrow types faster: on our GPU they run fp32 rows (as TF32) at twice the plain fp32 rate, fp16 at twice that, and int8 at twice fp16.
+Sirius therefore runs the filter on 1- or 2-byte codes of the rows.
 A code distance only approximates the true one, so each row's limit is widened by the largest error the codes can introduce.
-No pair of the exact answer is then filtered out, and the few extra pairs that pass are discarded when the survivors are re-scored in fp32, so the answer is the fp32 exact answer.
+No pair of the exact answer is then filtered out, the few extra pairs that pass are discarded when the candidates are re-scored in fp32, and the answer is the fp32 exact answer.\yxy{the above can be made a bit more intuitive. Give a try with AI, I can also help later.}
+
+\yxy{maybe describe the algorithm in steps. Step one is to build the codes, step 2 is low-precision join, step 3 is full-precision join. Explain how steps 2 and 3 are connected (a bitmap?)}\duke{for the later pass: there is no bitmap, the filter emits (probe row, build row, code distance) triples and the fp32 step re-scores exactly those.}
 
 \paragraph{Codes}
-The join builds the codes as its first step, inside the statement, as a hash join builds its hash table, and keeps them for later statements.
-Probe rows are coded the same way when the join starts.
+The join builds the codes as its first step, inside the statement, as a hash join builds its hash table, and keeps them for later statements; probe rows are coded the same way when the join starts.
 A float column is coded as fp16, one rounded value per component, or as int8.
 For int8, each row is first multiplied by a random orthogonal matrix, generated once from a fixed seed, and each component $j$ of the rotated row is coded as $\mathrm{round}((x_j-o_j)/\gamma)$, clamped to $\pm127$, with an offset $o_j$ per component and one scale $\gamma$ per column.
 The rotation preserves distances and spreads a component with a wide range over all components, so that one scale fits every component.
-A column whose values are all integers from 0 to 255, such as SIFT, is converted to bytes without loss: its distances on the int8 tensor cores are exact, so its limit needs no widening and its survivors no re-scoring.
+A column whose values are all integers from 0 to 255, such as SIFT, is stored as the bytes minus 128, which the int8 tensor cores multiply exactly and which leaves every distance unchanged: its limit needs no widening and its candidates no re-scoring.
 
 \paragraph{The limit}
 When the codes are built, Sirius records each row's coding error $e_x=\lVert x-\hat x\rVert$, where $\hat x$ is the decoded code, the largest error of the column, $e=\max_x e_x$, and each probe row's own error $e_r$.
@@ -83,11 +91,9 @@ A pair within the bound, $\lVert r-s\rVert\le\sqrt{b_r}$, then has $\lVert\hat r
     L_r=\bigl(\sqrt{b_r}+e_r+e\bigr)^2 .
 \]
 For fp16 the tensor cores accumulate the products in fp32, so the limit also adds the worst-case rounding of a $d$-term fp32 sum, $2d\,2^{-24}(\lVert\hat r\rVert+\max_s\lVert\hat s\rVert)^2$, from the standard forward-error bound of a dot product~\cite{Higham02}.
-
-RaBitQ also rotates vectors, quantizes them and uses an error bound to decide which candidates to re-rank~\cite{GaoRaBitQ24}, but its bound holds with high probability, which suits approximate search.
-Ours is deterministic, because it is computed from each row's measured error, so no row of the answer is lost.
-FaSTED computes Euclidean distances on fp16 tensor cores and accepts a small loss of accuracy~\cite{CurlessFaSTED25}; we use the same arithmetic as a filter and recover the exact distances by re-scoring.
+RaBitQ also rotates, quantizes and re-ranks under an error bound, but its bound holds with high probability, which suits approximate search~\cite{GaoRaBitQ24}; ours is computed from each row's measured error and is deterministic, so no row of the answer is lost.
+FaSTED computes Euclidean distances on fp16 tensor cores and accepts the loss~\cite{CurlessFaSTED25}; we use the same arithmetic as a filter and recover the exact distances by re-scoring.
 
 The two float codes trade speed against robustness.
-int8 halves the bytes of fp16 and doubles the tensor-core rate, but one scale per column makes its error grow with the widest component, so on skewed data the limit widens and many pairs pass.
+int8 halves the bytes of fp16 and doubles the tensor-core rate, but one scale per column makes its error grow with the widest component, so on skewed data the limit widens and many pairs pass; a scale per block of rows would tighten it and is future work.
 fp16 keeps an exponent per value, tolerates skew, and is the default for float columns; int8 is an option (Section~\ref{subsec:eval-ablations}).

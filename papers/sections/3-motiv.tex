@@ -11,70 +11,50 @@
 A \emph{vector join} is a similarity join between two relations of embeddings that runs inside a SQL engine, and we use this term for the rest of the paper.
 Its three forms vary by their reduction \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
 
-\yxy{in general, we should merge Sections 3 and 4.}
+%\yxy{in general, we should merge Sections 3 and 4.}
 
-\subsection{From Vector Search to Vector Join}\label{subsec:search-to-join}
-
-\yxy{To save space, maybe we fold Section 3.1 into other sections. For example, a lot of the points can be folded into Section 2. Also, for Figure 1 maybe just a simpler graph with four quadrants: index search, join, vector search, vector join. }
+%\yxy{To save space, maybe we fold Section 3.1 into other sections. For example, a lot of the points can be folded into Section 2. Also, for Figure 1 maybe just a simpler graph with four quadrants: index search, join, vector search, vector join. }
 
 \input{quadrant}
 
 % Figure 1, relational side: OLTP and OLAP are different problems with different engines
-Relational workloads split into transaction processing (OLTP) and analytical processing (OLAP) because the two turned out to be different problems~\cite{StonebrakerPavloAround24}.
-An OLTP query asks ``what matches this'' and looks up one customer, one order, or one account, while an OLAP query asks ``what matches what'' and joins whole tables against each other.
-OLTP serves lookups from persistent indexes built ahead of time (e.g., B-trees) and is measured by latency, while OLAP builds temporary structures (e.g., a hash table) at query time over intermediate results, and is measured by throughput.
-Stonebraker and \c{C}etintemel argued that these differences end the era of a single general-purpose engine~\cite{StonebrakerOneSize05}, and column stores such as C-Store and MonetDB proved this in practice~\cite{StonebrakerCStore05, IdreosMonetDB12}.
-These engines now form the basis of decision support over historical data~\cite{ChaudhuriDayal97}.
+Relational workloads split into transaction processing (OLTP), which looks up rows through persistent indexes and is measured by latency, and analytical processing (OLAP), which joins whole tables through structures built at query time and is measured by throughput~\cite{StonebrakerOneSize05, StonebrakerPavloAround24}.
 We argue that vector data is now at the same transition point (Figure~\ref{fig:quadrant}).
 
 % Figure 1, vector side: vector search is the OLTP half, and the vector join is the OLAP half
 Vector search is the OLTP half: it asks ``what is similar to this'' and returns the nearest neighbors of one query vector.
 The vector join is the OLAP half: it asks ``what is similar to what'' and relates the rows of one table of vectors to the rows of another.
 A relational join follows relationships that were declared ahead of time as keys, while a vector join finds relationships that nobody declared, between rows that share no key but a meaning.
-We believe the vector join can play the same role in decision support for everything that embeddings make comparable.
-
-% workloads that are vector joins, and the mode each one uses
-The workloads for this OLAP half already exist under different names.
-In machine learning pipelines, semantic deduplication joins a training corpus against itself to find and remove near-duplicate data points, and pruning this redundancy has been shown to improve both data efficiency and downstream model quality~\cite{HuSieveIVF26, AbbasSemDeDup23}.
-In data integration, entity resolution matches records across two sources by the similarity of their learned embeddings, which reduces a classically hard matching problem to a similarity join~\cite{SantanaEMJoin25, SantanaRibeiro23}.
-In retrieval and recommendation, a batch of user or query embeddings is compared against an item catalog or document corpus at once for offline candidate generation, evaluation, or the mining of hard negatives that train the next embedding model~\cite{HuangFBRetrieval20, XiongANCE21, ThakurBEIR21}.
-The per-row top-$k$ mode serves workloads that need the nearest neighbors of every probe row, such as batch retrieval and hard-negative mining, and the threshold mode serves workloads that need every pair within a distance bound, such as deduplication and entity resolution.
 
 \subsection{Why the GPU}\label{subsec:why-gpu}
 
-\yxy{we can use quantitative metrics to show how compute intensive vector join is and how GPU and tensor cores are so much better than CPU for this type of computation. This section also should be much shorter. We can keep figure 2.}
-% the vector join is a matrix product, so its work is dominated by GEMM
-The vector join is an especially good fit for the GPU, because moving from one query vector to many changes the kind of work the hardware does.
-Under the metrics of Section~\ref{subsec:embeddings-and-vectors}, for two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, (r \cdot s)$.
-If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
-The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so when both sides are large, the work is dominated by a dense matrix multiplication (GEMM).
-Columnar engines store a column of embeddings as one contiguous matrix, and the GPU is built to compare one matrix against another.
+%\yxy{we can use quantitative metrics to show how compute intensive vector join is and how GPU and tensor cores are so much better than CPU for this type of computation. This section also should be much shorter. We can keep figure 2.}
+% how compute-intensive the vector join is
+A vector join is far more compute-intensive than a relational join.
+Comparing two vectors takes one multiply-accumulate (MAC) per dimension, and an exact join compares every pair, so joining $m$ probe rows with $n$ corpus rows of $d$ dimensions takes $mnd$ MACs.
+For 10K probe rows and 10M corpus rows of 128 dimensions, that is about $10^{13}$ MACs.
 
-% a search is bandwidth-bound and a join is compute-bound, so the join belongs in a GPU-native SQL engine
-A single search ($m=1$) is a matrix-vector product, in which each corpus vector is read once and used once, so it is bound by memory bandwidth and leaves most of the GPU's compute idle.
-This is why the GPU libraries in Section~\ref{subsec:gpu-data-processing} take a batch of queries per call.
-A join that computes distances one pair at a time has the same problem, because it reads two values for every multiply-accumulate (MAC).
-% \andy{explains MACs = distance computations × d in evaluation}
-Computed as $RS^\top$, the join is instead a matrix-matrix product in which each corpus vector is reused across many probe rows, so the work becomes compute-bound and runs as GEMM.
-The Databricks operator relies on the same reuse, and its roofline estimate shows that the join becomes compute-bound once about 64 probe vectors are buffered~\cite{DatabricksNearestByJoinBlog26}.
-Once the join is compute-bound, its speed depends on how much arithmetic the hardware delivers.
-We therefore argue that the vector join should run as an operator in a GPU-native SQL engine.
+% the vector join is a matrix product, so its work is dominated by GEMM
+This work is a dense matrix multiplication (GEMM).
+For two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, (r \cdot s)$, so every metric needs only the dot product of the pair and the norm of each vector.
+If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
+The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so the work is dominated by GEMM, which the tensor cores of our GPU execute at \andy{X}~TFLOPS, against \andy{Y}~TFLOPS for \andy{CPU}.
 
 \input{exact-probe-sweep}
 
-% evidence: the GPU's advantage grows as the probe side grows
-Figure~\ref{fig:exact-probe-sweep} shows this shift on an exact threshold join of $m$ probe rows against Bigann10M\@.
-At $m=1$, the join is a matrix-vector product, and Sirius is only 3.6$\times$ faster than DuckDB\@.
-As $m$ grows, the join becomes a matrix-matrix product, and Sirius's throughput keeps rising until $m=1$K, while DuckDB's levels off by $m=100$.
+% a search is bandwidth-bound and a join is compute-bound, as Figure 2 shows
+A single search ($m=1$) is a matrix-vector product that uses each corpus vector once and is bound by memory bandwidth, while a join reuses each corpus vector across all probe rows and becomes compute-bound as the probe side grows.
+Figure~\ref{fig:exact-probe-sweep} shows this shift on an exact threshold join against SIFT10M\@.
+Sirius is only 3.6$\times$ faster than DuckDB at $m=1$ but 106$\times$ faster at $m=10$K, because its throughput keeps rising with $m$ while DuckDB's levels off by $m=100$.
 
 \subsection{Vector Join Interface}\label{subsec:vector-join-interface}
 
-\yxy{try to be more concise. }
+%\yxy{try to be more concise. }
 
 \input{vector-join-modes}
 
 % two interfaces, both support the three modes
-Sirius exposes the vector join through two interfaces, a table function and native SQL, and both support all three modes, so they cover the workloads in Section~\ref{subsec:search-to-join} (Table~\ref{tab:vector-join-api}).
+Sirius exposes the vector join through two interfaces, a table function and native SQL, and both support all three modes (Table~\ref{tab:vector-join-api}).
 The table function gives more control over how the join executes, most importantly the choice of approximate search, while native SQL runs the queries that users already write for DuckDB without changes.
 
 % explaining TVF
@@ -83,16 +63,74 @@ The table function gives more control over how the join executes, most important
 The table function, \texttt{sirius\_knn\_join} (Table~\ref{tab:tvf-signature}), takes the probe relation $R$ as its left input and the corpus relation $S$ as its right input, each given as a table and a vector column.
 The remaining arguments are optional and passed by name.
 The join mode follows from the arguments: the join returns the per-row top-$k$ by default, \texttt{eps} selects threshold, and \texttt{join\_mode=>\sq{global}} selects global top-$k$.
-\texttt{metric} chooses L2 or cosine distance, and \texttt{output\_type} returns either a distance or, for cosine, a similarity.
-\texttt{search\_mode} chooses how the join is computed: \texttt{\sq{exact-gemm}} computes distances with GEMM, \texttt{\sq{exact}} computes them directly without GEMM, and \texttt{\sq{approx}} searches an ANN index (Section~\ref{sec:technical-2:-approximate}).
-The arguments \texttt{left\_\allowbreak output\_\allowbreak columns} and \texttt{right\_\allowbreak output\_\allowbreak columns} select the output columns; by default, the output carries only the primary key of each input.
+\texttt{metric} chooses L2 or cosine distance.
+\texttt{search\_mode} chooses how the join is computed: \texttt{\sq{exact-gemm}} computes distances with GEMM, \texttt{\sq{exact}} computes them directly without GEMM, and \texttt{\sq{approx}} runs the approximate join (Section~\ref{sec:approx-join}).
 
 % explaining native SQL syntax
 Native SQL recognizes the vector join in queries that DuckDB already accepts.
-Sirius receives the query plan that DuckDB produces and matches three query shapes as vector joins.
 A \texttt{LATERAL} subquery that orders the corpus by distance to each probe row and keeps the first $k$ rows is a per-row top-$k$ join.
 A cross product of the two tables ordered by distance with a \texttt{LIMIT} of $k$ is a global top-$k$ join.
 A join whose predicate bounds the distance by $\varepsilon$ is a threshold join.
 The distance function sets the metric: \texttt{array\_distance} for L2 and \texttt{array\_cosine\_distance} for cosine.
 Native queries always run the exact join.
 Requesting approximate search from SQL needs new syntax, and the \texttt{NEAREST BY} clause that Spark and DuckDB have recently added (Section~\ref{subsec:similarity-join}) is a natural starting point, which we leave to future work.
+
+\subsection{Vector Join Execution}\label{sec:vector-join-execution}
+
+%\yxy{Section 4 can just be the last subsection in Section 3, should be more concise.}
+
+%\yxy{also need to discuss the following in this section:
+%Conventional joins can be implemented in different ways, such as nested-look join (NLJ), block NLJ, index NLJ, hash join etc. Vector join also have corresponding implementations in each category. We will focus on two variants: our exact vector join is a block NLJ, which works on small data but cannot scale to large data sets. Then our approx vector join is similar to a partitioned hash join, which can scale to much larger data sets. Also, Table 3 can be moved here.
+%}
+
+% join algorithms and their vector counterparts; we focus on two
+A relational join can run as a nested-loop join, a block nested-loop join, an index nested-loop join, or a hash join, and a vector join has a counterpart for each; Table~\ref{tab:join-analogy} lists the main ones.
+We focus on two of them.
+The exact join is a block nested-loop join: it compares every probe row with every corpus row, which works on small inputs but does not scale to large ones (Section~\ref{sec:exact-join}).
+The approximate join is a partitioned hash join: it co-partitions both inputs and compares rows only within matching partitions, which scales to much larger inputs (Section~\ref{sec:approx-join}).
+
+\begin{table}[t]
+    \centering\footnotesize
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{@{}p{0.17\columnwidth}p{0.43\columnwidth}p{0.33\columnwidth}@{}}
+        \toprule
+        \raggedright Relational join & \raggedright Vector counterpart & \raggedright Examples \tabularnewline
+        \midrule
+        \rowcolor{black!6}\raggedright Block nested loop & \raggedright Compare every probe tile with every build tile & \raggedright Sirius exact join (\S\ref{sec:exact-join}), Databricks \texttt{NEAREST BY}~\cite{DatabricksNearestByJoinBlog26}, DuckDB \texttt{vss\_join}~\cite{DuckDBVSS} \tabularnewline
+        \raggedright Index nested loop & \raggedright One search of a prebuilt vector index per probe row & \raggedright FAISS~\cite{JohnsonFaissGPU21}, cuVS~\cite{NvidiaCuVS26}, DuckDB HNSW join~\cite{DuckDBVSSBlog24}, MaxVec~\cite{MaxVec26} \tabularnewline
+        \rowcolor{black!6}\raggedright Co-partitioned hash join & \raggedright Co-partition both inputs at query time by the build side's k-means; a probe row goes to its $n_p$ nearest partitions & \raggedright Sirius approximate join (this section), SemDeDup~\cite{AbbasSemDeDup23} \tabularnewline
+        \bottomrule
+    \end{tabular}
+    \caption{Relational join algorithms and their vector counterparts.}
+    \label{tab:join-analogy}
+\end{table}
+
+% exact: exhaustive pair-wise comparison
+
+\input{exact-join}
+
+% the three modes share the distance computation and differ only in the reduction
+In the exact join, all three modes compute the distance between every probe row and every corpus row, and they differ only in the reduction applied to the resulting $mn$ pairs.
+Per-row keeps $k$ pairs for each probe row, global keeps $k$ pairs overall, and threshold keeps every pair within $\varepsilon$.
+Sirius cannot apply this reduction to all $mn$ pairs at once because by its design it partitions both relations into batches during the scan.
+So Sirius computes one pair of a probe batch and a corpus batch at a time and the reduction therefore has two levels: a local reduction within each batch pair, and a global reduction that combines local results into the final answer (Figure~\ref{fig:exact-join}).
+In every mode, Sirius gathers output columns only for pairs that survive the local reduction and never for the full set of pairs.
+
+\paragraph{Per-row}
+Per-row returns the $k$ nearest corpus rows for each probe row.
+Within a batch pair, the local reduction keeps a list of $k$ nearest neighbors in that corpus batch for each probe row.
+The global reduction then merges, for each probe row, one list of $k$ candidates per corpus batch into the final $k$.
+With $q$ corpus batches, the merge reads at most $mkq$ candidates instead of $mn$ pairs, and the output has exactly $k$ rows per probe row, or $n$ rows when the corpus has fewer than $k$.
+
+\paragraph{Global}
+Global returns the $k$ nearest pairs across the whole join.
+Within a batch pair, the local reduction runs the per-row step and keeps the $k$ nearest pairs in that batch pair.
+The global reduction is then an ordinary relational top-$N$ over at most $k$ candidates per batch pair.
+Sirius runs this step with the engine's existing top-$N$ operators.
+
+\paragraph{Threshold}
+Threshold returns every pair whose distance falls within a radius $\varepsilon$.
+Within a batch pair, the local reduction keeps every pair within $\varepsilon$.
+Whether a pair survives depends only on its own distance, so the global reduction is the union of the local results.
+The output size ranges from zero to $mn$ and depends on the data and on $\varepsilon$.
+

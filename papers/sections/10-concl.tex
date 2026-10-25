@@ -1,9 +1,6 @@
 \section{Conclusion}\label{sec:conclusion}
 
-Vector search answers one query vector at a time.
 A vector join relates two tables of vectors, and we argued that it should be built like a relational join: at query time, on the GPU, and planned by the optimizer.
-Sirius's exact join is a blocked nested-loop join on tensor cores that filters 1- and 2-byte codes under a deterministic bound and re-scores the survivors in fp32.
-Its approximate join is a hash join whose hash function is k-means, and it joins each partition once with the exact join's kernel.
-Both run through the engine's memory tiers, from plain SQL.
-With every build charged, the approximate join is faster than every GPU index we measured at every recall target from 0.90, and at 10k probe rows the exact join is 5.9--7.8$\times$ faster than FAISS-GPU's exact search, up to 100M rows.
-When an index already exists, an index nested-loop join over it can be the cheaper plan, as in relational engines; choosing between the two from the catalog is the planner's next decision.
+Sirius's exact join is a blocked nested-loop join that filters 1- and 2-byte codes inside the GEMM under a deterministic bound and re-scores the survivors in fp32; its approximate join is a partitioned hash join whose partitioning function is k-means, run slice by slice with the same kernel.
+With every build charged, the approximate join matches or beats every GPU index we measured at every recall from 0.90, by 1.2--4$\times$ at recall 0.95 and 10k probe rows and by an order of magnitude at 10M, and the exact join is 5.9--7.6$\times$ faster than FAISS-GPU's exact search at 10k probe rows, up to 100M rows, after the first statement in a process.
+A prebuilt graph index wins only when it serves thousands of small statements, as a persistent index does for relational data; choosing between the two from the catalog, and pushing relational filters through the join, are the planner's next decisions.

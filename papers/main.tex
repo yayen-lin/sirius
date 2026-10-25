@@ -73,14 +73,6 @@
     }
 
     \begin{abstract}
-
-% in abstract we enter it with a hook
-%
-% and then 3 args are briefly talked about, echoed later:
-%   1. OLAP remains unexplored
-%   2. database engine is the perfect fit
-%   3. GPU is the perfect fit
-
         Relational data went through OLTP to OLAP decades ago: answering one row at a time and analyzing all rows at once turned out to be different problems that need different engines.
         In this paper, we argue that vector search solves the OLTP half of the problem, while the OLAP half remains largely unexplored, and that the GPU is the natural way to scale it and a database engine is the perfect fit for it.
         We present Sirius vector join, a prototype first class operator that integrates into and is optimized by query plan.
@@ -95,7 +87,6 @@
     \input{sections/1-intro}
     \input{sections/2-back}
     \input{sections/3-motiv}
-    \input{sections/4-exact}
     \input{sections/5-exactjoin}
     \input{sections/6-approx}
     \input{sections/7-integration}
