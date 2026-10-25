@@ -7,9 +7,12 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
 # fixed engine -> style so an engine looks the same in every figure
-COLORS = {"sirius": "#2a78d6", "duckdb": "#eb6834", "cuvs": "#1baf7a", "faiss": "#eda100", "hnsw": "#e87ba4"}
-MARKERS = {"sirius": "o", "duckdb": "s", "cuvs": "^", "faiss": "D", "hnsw": "v"}
-LABELS = {"sirius": "Sirius", "duckdb": "DuckDB", "cuvs": "cuVS", "faiss": "FAISS", "hnsw": "DuckDB HNSW"}
+# (duckdb-bf is the same brute-force engine as duckdb, named apart from duckdb-ialj in curves 5-6)
+COLORS = {"sirius": "#2a78d6", "duckdb": "#eb6834", "duckdb-bf": "#eb6834", "cuvs": "#1baf7a", "faiss": "#eda100",
+          "duckdb-ialj": "#e87ba4"}
+MARKERS = {"sirius": "o", "duckdb": "s", "duckdb-bf": "s", "cuvs": "^", "faiss": "D", "duckdb-ialj": "v"}
+LABELS = {"sirius": "Sirius", "duckdb": "DuckDB", "duckdb-bf": "DuckDB-BF", "cuvs": "cuVS", "faiss": "FAISS",
+          "duckdb-ialj": "DuckDB-IALJ"}
 
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 

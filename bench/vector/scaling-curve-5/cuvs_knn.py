@@ -1,6 +1,6 @@
 """Per-row exact top-k with cuVS brute force; times only the search call.
 
-Usage: bench/vector/scaling-curve-5/.venv/bin/python cuvs_knn.py --db <file.duckdb> --k 10 --probe 1000 [--reps 10] [--table base]
+Usage: bench/vector/scaling-curve-5/.venv/bin/python cuvs_knn.py --db <file.duckdb> --k 10 [--probe 1000] [--reps 10] [--table base]
 """
 import argparse
 import sys
@@ -20,7 +20,7 @@ def load(con, table, sql):
 ap = argparse.ArgumentParser()
 ap.add_argument("--db", required=True)
 ap.add_argument("--k", type=int, required=True)
-ap.add_argument("--probe", type=int, required=True)
+ap.add_argument("--probe", type=int, default=None)  # default: all queries
 ap.add_argument("--reps", type=int, default=1)
 ap.add_argument("--table", default="base")
 args = ap.parse_args()
@@ -36,16 +36,19 @@ if corpus_rows * dim * 4 >cp.cuda.Device().mem_info[0] // 2:
     raise SystemExit(3)
 
 base = cp.asarray(load(con, args.table, f"SELECT vec FROM {args.table}"))
-queries = cp.asarray(load(con, args.table, f"SELECT vec FROM queries LIMIT {args.probe}"))
+queries = cp.asarray(load(con, args.table, f"SELECT vec FROM queries" + (f" LIMIT {args.probe}" if args.probe else "")))
 
 index = brute_force.build(base, metric="sqeuclidean")
+
+# setup done: run.sh's watchdog limits each search from here on
+print("##go", flush=True)
 
 # warmup, so CUDA context and kernel setup aren't in the timed search
 brute_force.search(index, queries, args.k)
 cp.cuda.Device().synchronize()
 
 # prints the row count, then one duckdb-CLI style timer line per rep so run.sh can parse it
-print(f"cuvs  k={args.k} probe={args.probe} corpus={base.shape[0]}", file=sys.stderr)
+print(f"cuvs  k={args.k} probe={queries.shape[0]} corpus={base.shape[0]}", file=sys.stderr)
 for rep in range(args.reps):
     t0 = time.perf_counter()
     distances, neighbors = brute_force.search(index, queries, args.k)
