@@ -14,6 +14,7 @@
 
 \usepackage{listings}
 \usepackage{xcolor}
+\usepackage{colortbl}
 \usepackage{tcolorbox}
 \usepackage{booktabs}
 \usepackage{multirow}
@@ -32,6 +33,7 @@
 \newcommand{\sq}[1]{\textquotesingle#1\textquotesingle}
 \newcommand{\yxy}[1]{\textcolor{blue}{[yxy] #1}}
 \newcommand{\andy}[1]{\textcolor[HTML]{FF375F}{[andy] #1}}
+\newcommand{\duke}[1]{\textcolor[HTML]{2E7D32}{[duke] #1}}
 
 \AtBeginDocument{%
     \providecommand\BibTeX{{%
@@ -45,7 +47,6 @@
 
     \title{Vector Join on GPU} % or GPU accelerated Vector Join
 
-
     \author{Yayen Lin}
     \email{yayen@cs.wisc.edu}
     \authornote{These authors contributed equally to this research.}
@@ -55,7 +56,7 @@
         \country{USA}
     }
 
-    \author{Duke Nguyen}
+    \author{Dinh Huu Duc Nguyen}
     \email{dnguyen56@wisc.edu}
     \authornotemark[1]
     \affiliation{%
@@ -73,14 +74,20 @@
     }
 
     \begin{abstract}
-        Relational data went through OLTP to OLAP decades ago: answering one row at a time and analyzing all rows at once turned out to be different problems that need different engines.
-        In this paper, we argue that vector search solves the OLTP half of the problem, while the OLAP half remains largely unexplored, and that the GPU is the natural way to scale it and a database engine is the perfect fit for it.
-        We present Sirius vector join, a prototype first class operator that integrates into and is optimized by query plan.
-        It runs on Sirius, a GPU native SQL engine, and leverages cuVS for high-performance batched vector search (a vector join is, at its core, a batched vector search).
-        On the exact join path it is 167$\times$ faster than a DuckDB vector join that uses LATERAL (SIFT1M, 10k probes), and on the approximate join path it is 72--229$\times$ faster than DuckDB's HNSW index join (SIFT100M, recall 0.85--0.99).
+        Vectors are becoming a standard data type in databases. Besides vector search, a growing class of workloads require \textit{joining} two columns of vectors within a query, such as semantic deduplication, entity resolution, and offline recommendation. % all ask which pairs of rows are close.
+        We call this operation a \emph{vector join}.
+        It resembles a relational join but is far more compute-intensive due to performing hundreds of multiply-adds per vector pair.
+%and a join compares every pair, so it is far more compute-intensive than any relational join.
+        We observe that this computation pattern fits perfectly on a GPU: %Our insight is that this work fits the GPU:
+        a many-to-many vector comparison is a dense matrix multiplication, which tensor cores are optimized for in native hardware speed. %, and a join reuses each vector across many rows where a search reads it once.
+        We present a GPU-optimized vector join operator, its exact and approximate variants, and integrate it into Sirius, a GPU-native analytics engine. %that the query optimizer plans like a relational join.
+        Our exact vector join is a blocked nested-loop join that filters inside the tensor-core GEMM under a deterministic bound over 1- and 2-byte codes; our approximate vector join is a partitioned hash join whose partitioning function is k-means.
+        We show that %, with every build charged,
+        the exact vector join is 6--7$\times$ faster than the second-fastest GPU system, FAISS-GPU's exact search, on 1M to 100M rows, and the approximate vector join beats the best of five GPU indexes by 4--6$\times$ at 10M probe rows, at recall 0.95 and above.
+        When running vector joins within a query, Sirius on GPU shows speedups from 48$\times$ to 10\,000$\times$ over DuckDB on CPU.
     \end{abstract}
 
-    \keywords{Vector Join, Vector Search, Similarity, GPU Database}
+    \keywords{Vector Join, Vector Search, Similarity, GPU Database, Sirius}
 
     \maketitle
 
@@ -89,7 +96,6 @@
     \input{sections/3-motiv}
     \input{sections/5-exactjoin}
     \input{sections/6-approx}
-    \input{sections/7-integration}
     \input{sections/8-eval}
     \input{sections/9-related}
     \input{sections/10-concl}

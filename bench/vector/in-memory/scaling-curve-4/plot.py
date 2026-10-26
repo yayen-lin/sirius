@@ -48,6 +48,8 @@ def speedup_label(s):
 if __name__ == "__main__":
     rows = parse(DATA)
     fig, ax = figure()
+    # flatter than the shared default so the figure takes less column height
+    fig.set_size_inches(3.4, 1.6)
     ax.spines["right"].set_visible(False)
     for e in ENGINES:
         x, y = dist_per_sec(rows, e)
@@ -77,14 +79,15 @@ if __name__ == "__main__":
     ax.set_xscale("log")
     ax.set_xticks([1, 10, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7])
     ax.xaxis.set_minor_locator(NullLocator())
-    ax.xaxis.set_major_formatter(FuncFormatter(human))
+    # lowercase k to match the paper text (10k)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, p: human(x, p).replace("K", "k")))
     ax.set_yscale("log")
     # end on a labeled decade above the Sirius plateau
     ax.set_ylim(top=1e11)
     log_axis(ax.yaxis)
     ax.yaxis.set_major_formatter(FuncFormatter(human))
     ax.set_xlabel(r"Probe rows ($m$)")
-    ax.set_ylabel("Throughput (distance computations/s)")
+    ax.set_ylabel("Throughput (distances/s)")
 
     handles = engine_handles(ENGINES)
     if any_to:

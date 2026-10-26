@@ -9,6 +9,7 @@
 
 % define vector join and its three modes
 A \emph{vector join} is a similarity join between two relations of embeddings that runs inside a SQL engine, and we use this term for the rest of the paper.
+%\yxy{refer to Sec2.3 when presenting the three modes.}
 It takes the three forms of similarity join from Section~\ref{subsec:similarity-join}, which we call its reduction \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
 
 %\yxy{in general, we should merge Sections 3 and 4.}
@@ -24,38 +25,38 @@ We argue that vector data is now at the same transition point (Figure~\ref{fig:q
 % Figure 1, vector side: vector search is the OLTP half, and the vector join is the OLAP half
 Vector search is the OLTP half: it asks ``what is similar to this'' and returns the nearest neighbors of one query vector.
 The vector join is the OLAP half: it asks ``what is similar to what'' and relates the rows of one table of vectors to the rows of another.
-A relational join follows relationships that were declared ahead of time as keys, while a vector join finds relationships that nobody declared, between rows that share no key but a meaning.
+A relational join follows relationships that were declared ahead of time as keys, while a vector join finds relationships that nobody declared, between rows that share no key but a meaning.\yxy{I love these paragraphs! very well written! well done!}
 
 \subsection{Why the GPU}\label{subsec:why-gpu}
 
 %\yxy{we can use quantitative metrics to show how compute intensive vector join is and how GPU and tensor cores are so much better than CPU for this type of computation. This section also should be much shorter. We can keep figure 2.}
 % how compute-intensive the vector join is
 A vector join is far more compute-intensive than a relational join.
-Comparing two vectors takes one multiply-accumulate (MAC) per dimension, and an exact join compares every pair, so joining $m$ probe rows with $n$ corpus rows of $d$ dimensions takes $mnd$ MACs.
-For 10K probe rows and 10M corpus rows of 128 dimensions, that is about $10^{13}$ MACs.
+Comparing two vectors takes one multiply-accumulate (MAC) per dimension, and an exact join compares every pair, so joining $m$ probe rows with $n$ build rows of $d$ dimensions takes $mnd$ MACs.
+For 10k probe rows and 10M build rows of 128 dimensions, that is about $10^{13}$ MACs.
 
 % the vector join is a matrix product, so its work is dominated by GEMM
 These $mnd$ MACs form a dense matrix multiplication (GEMM).
 For two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, (r \cdot s)$, so every metric needs only the dot product of the pair and the norm of each vector.
-If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
+If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the build-side vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
 The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so the work is dominated by GEMM, which the tensor cores of our GPU execute at \andy{X}~TFLOPS, against \andy{Y}~TFLOPS for \andy{CPU}.
 
 \input{exact-probe-sweep}
 
 % a search is bandwidth-bound and a join is compute-bound, as Figure 2 shows
-A single search ($m=1$) is a matrix-vector product that uses each corpus vector once and is bound by memory bandwidth, while a join reuses each corpus vector across all probe rows and becomes compute-bound as the probe side grows.
+A single search ($m=1$) is a matrix-vector product that uses each build-side vector once and is bound by memory bandwidth, while a join reuses each build-side vector across all probe rows and becomes compute-bound as the probe side grows.
 Figure~\ref{fig:exact-probe-sweep} shows this shift on an exact threshold join against SIFT10M\@.
-Sirius is only 3.6$\times$ faster than DuckDB at $m=1$ but 106$\times$ faster at $m=10$K, because its throughput keeps rising with $m$ while DuckDB's levels off by $m=100$.
+Sirius is only 3.6$\times$ faster than DuckDB at $m=1$ but 106$\times$ faster at $m=10$k, because its throughput keeps rising with $m$ while DuckDB's levels off by $m=100$.
 
 \subsection{Vector Join Interface}\label{subsec:vector-join-interface}
 
-%\yxy{try to be more concise. }
+% \yxy{try to be more concise. }
 
 \input{vector-join-modes}
 
 % two interfaces, both support the three modes
-Sirius exposes the vector join through two interfaces, a table function and native SQL, and both support all three modes (Table~\ref{tab:vector-join-api}).
-The table function gives more control over how the join executes, most importantly the choice of approximate search, while native SQL runs the queries that users already write for DuckDB without changes.
+Sirius exposes the vector join through two interfaces, a \textit{table function} and \textit{native SQL}, and both support all three modes (Table~\ref{tab:vector-join-api}).
+The table function exposes every option of the join, while native SQL runs the queries that users already write for DuckDB without changes.
 
 \input{vector-join-tvf}
 
@@ -80,8 +81,8 @@ Native queries run the exact join by default, and \texttt{SET vector\_join\_prob
 % join algorithms and their vector counterparts; we focus on two
 A relational join can run as a nested-loop join, a block nested-loop join, an index nested-loop join, or a hash join, and a vector join has a counterpart for each; Table~\ref{tab:join-analogy} lists the main ones.
 We focus on two of them.
-The exact join is a block nested-loop join: it compares every probe row with every corpus row, which works on small inputs but does not scale to large ones (Section~\ref{sec:exact-join}).
-The approximate join is a partitioned hash join: it co-partitions both inputs and compares rows only within matching partitions, which scales to much larger inputs (Section~\ref{sec:approx-join}).
+Our exact join is implemented as a block nested-loop join: it compares every probe row with every build row, which works on small inputs but does not scale to large ones (Section~\ref{sec:exact-join}).
+Our approximate join is implemented as a partitioned hash join: it co-partitions both inputs and compares rows only within matching partitions, which scales to much larger inputs (Section~\ref{sec:approx-join}).
 
 \begin{table}[t]
     \centering\footnotesize
@@ -102,6 +103,8 @@ The approximate join is a partitioned hash join: it co-partitions both inputs an
 % exact: exhaustive pair-wise comparison
 
 \input{exact-join}
+
+\yxy{since the three modes are already discussed in Sec 2.3, their discussion can be significantly simplified below. Since later sections will explain the execution in detail, I feel this section mainly serves two goals: (1) an overview of next 2 sections (2) point out the join + reduction structure; and make sure a reader understands what we mean by reduction.}
 
 % the three modes share the distance computation and differ only in the reduction
 Both joins compute distances between probe rows and build rows and then apply a \emph{reduction}, which keeps only the pairs the mode asks for: $k$ per probe row for per-row top-$k$, $k$ overall for global top-$k$, and every pair within $\varepsilon$ for threshold (Section~\ref{subsec:similarity-join}).

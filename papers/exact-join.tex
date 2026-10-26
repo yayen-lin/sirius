@@ -149,8 +149,9 @@
     \end{tikzpicture}
     \captionsetup{textfont=normalfont}
     %\yxy{sorry for the back and forth but we won't talk about spilling until the implementation section. So the left part of the figure is not need here---we just need to show two tables that are both  logically partitoned into batches. Also, the figure can be narrower vertically to save space}
+    % \yxy{remove "Tables in batches" and "GPU: up to ..." on top of the figure. Shall we call them steps 1, 2, 3? simpler that way.}
     \caption{
-        Exact vector join. Both tables are logically partitioned into batches, and the GPU joins one pair of batches per task.
+        \textbf{Exact vector Join}---Both tables are logically partitioned into batches, and the GPU joins one pair of batches per task.
     }
     \label{fig:exact-join}
 \end{figure*}

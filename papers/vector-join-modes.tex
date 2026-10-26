@@ -4,6 +4,7 @@
 \begin{table*}[t]
     \centering
     \captionsetup{textfont=normalfont}
+    % \yxy{I don't know how but I feel Tables 1 and 2 can be more dense and take less space. There is significant white space right now. especially table 1. E.g., maybe the background box can be removed.}
     \caption{
         Each vector join mode written with the table function (top) and as native SQL (bottom).
         Highlighted parts select the mode.
@@ -62,8 +63,7 @@ FROM R, @LATERAL@ (
   SELECT S.id,
     array_distance(R.emb, S.emb) AS dist
   FROM S
-  @ORDER BY array_distance(R.emb, S.emb)@
-  @LIMIT 5@) nn;
+  @ORDER BY dist LIMIT 5@) nn;
 \end{lstlisting}
             \end{tcolorbox}
             \begin{tcolorbox}[vjcard, vjmode=vjglobal]
