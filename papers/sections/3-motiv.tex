@@ -9,7 +9,7 @@
 
 % define vector join and its three modes
 A \emph{vector join} is a similarity join between two relations of embeddings that runs inside a SQL engine, and we use this term for the rest of the paper.
-Its three forms vary by their reduction \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
+It takes the three forms of similarity join from Section~\ref{subsec:similarity-join}, which we call its reduction \emph{modes}: per-row top-$k$, global top-$k$, and threshold.
 
 %\yxy{in general, we should merge Sections 3 and 4.}
 
@@ -35,7 +35,7 @@ Comparing two vectors takes one multiply-accumulate (MAC) per dimension, and an 
 For 10K probe rows and 10M corpus rows of 128 dimensions, that is about $10^{13}$ MACs.
 
 % the vector join is a matrix product, so its work is dominated by GEMM
-This work is a dense matrix multiplication (GEMM).
+These $mnd$ MACs form a dense matrix multiplication (GEMM).
 For two vectors $r$ and $s$, their inner product is $r \cdot s$, cosine similarity divides it by $\lVert r \rVert \lVert s \rVert$, and squared L2 distance expands to $\lVert r \rVert^2 + \lVert s \rVert^2 - 2\, (r \cdot s)$, so every metric needs only the dot product of the pair and the norm of each vector.
 If the probe vectors are stacked as the rows of an $m \times d$ matrix $R$ and the corpus vectors as the rows of an $n \times d$ matrix $S$, all $mn$ dot products are the entries of the matrix product $RS^\top$.
 The norms take $O((m+n)d)$ work and are computed once per vector, while the product takes $O(mnd)$ and is computed once per pair, so the work is dominated by GEMM, which the tensor cores of our GPU execute at \andy{X}~TFLOPS, against \andy{Y}~TFLOPS for \andy{CPU}.
@@ -57,23 +57,17 @@ Sirius is only 3.6$\times$ faster than DuckDB at $m=1$ but 106$\times$ faster at
 Sirius exposes the vector join through two interfaces, a table function and native SQL, and both support all three modes (Table~\ref{tab:vector-join-api}).
 The table function gives more control over how the join executes, most importantly the choice of approximate search, while native SQL runs the queries that users already write for DuckDB without changes.
 
-% explaining TVF
 \input{vector-join-tvf}
 
-The table function, \texttt{sirius\_knn\_join} (Table~\ref{tab:tvf-signature}), takes the probe relation $R$ as its left input and the corpus relation $S$ as its right input, each given as a table and a vector column.
-The remaining arguments are optional and passed by name.
-The join mode follows from the arguments: the join returns the per-row top-$k$ by default, \texttt{eps} selects threshold, and \texttt{join\_mode=>\sq{global}} selects global top-$k$.
-\texttt{metric} chooses L2 or cosine distance.
-\texttt{search\_mode} chooses how the join is computed: \texttt{\sq{exact-gemm}} computes distances with GEMM, \texttt{\sq{exact}} computes them directly without GEMM, and \texttt{\sq{approx}} runs the approximate join (Section~\ref{sec:approx-join}).
-
-% explaining native SQL syntax
+% explaining TVF and native SQL syntax
+The table function, \texttt{sirius\_knn\_join} (Table~\ref{tab:tvf-signature}), takes the probe relation $R$ and the build relation $S$, each as a table and a vector column, and optional arguments by name.
+Table~\ref{tab:vector-join-api} shows how the arguments select the mode, and \texttt{search\_mode=>\sq{approx}} runs the approximate join (Section~\ref{sec:approx-join}).
 Native SQL recognizes the vector join in queries that DuckDB already accepts.
-A \texttt{LATERAL} subquery that orders the corpus by distance to each probe row and keeps the first $k$ rows is a per-row top-$k$ join.
+A \texttt{LATERAL} subquery that orders the build side by distance to each probe row and keeps the first $k$ rows is a per-row top-$k$ join.
 A cross product of the two tables ordered by distance with a \texttt{LIMIT} of $k$ is a global top-$k$ join.
 A join whose predicate bounds the distance by $\varepsilon$ is a threshold join.
-The distance function sets the metric: \texttt{array\_distance} for L2 and \texttt{array\_cosine\_distance} for cosine.
-Native queries always run the exact join.
-Requesting approximate search from SQL needs new syntax, and the \texttt{NEAREST BY} clause that Spark and DuckDB have recently added (Section~\ref{subsec:similarity-join}) is a natural starting point, which we leave to future work.
+Sirius replaces each of these shapes with its join operator inside DuckDB's optimized plan and keeps the rest of the plan; a plan it cannot prove equivalent stays on DuckDB's CPU operators.
+Native queries run the exact join by default, and \texttt{SET vector\_join\_probes = $n_p$} asks for the approximate join (Section~\ref{subsec:approx-build}).
 
 \subsection{Vector Join Execution}\label{sec:vector-join-execution}
 
@@ -98,7 +92,7 @@ The approximate join is a partitioned hash join: it co-partitions both inputs an
         \midrule
         \rowcolor{black!6}\raggedright Block nested loop & \raggedright Compare every probe tile with every build tile & \raggedright Sirius exact join (\S\ref{sec:exact-join}), Databricks \texttt{NEAREST BY}~\cite{DatabricksNearestByJoinBlog26}, DuckDB \texttt{vss\_join}~\cite{DuckDBVSS} \tabularnewline
         \raggedright Index nested loop & \raggedright One search of a prebuilt vector index per probe row & \raggedright FAISS~\cite{JohnsonFaissGPU21}, cuVS~\cite{NvidiaCuVS26}, DuckDB HNSW join~\cite{DuckDBVSSBlog24}, MaxVec~\cite{MaxVec26} \tabularnewline
-        \rowcolor{black!6}\raggedright Co-partitioned hash join & \raggedright Co-partition both inputs at query time by the build side's k-means; a probe row goes to its $n_p$ nearest partitions & \raggedright Sirius approximate join (this section), SemDeDup~\cite{AbbasSemDeDup23} \tabularnewline
+        \rowcolor{black!6}\raggedright Co-partitioned hash join & \raggedright Co-partition both inputs at query time by the build side's k-means; a probe row goes to its $n_p$ nearest partitions & \raggedright Sirius approximate join (\S\ref{sec:approx-join}), SemDeDup~\cite{AbbasSemDeDup23} \tabularnewline
         \bottomrule
     \end{tabular}
     \caption{Relational join algorithms and their vector counterparts.}
@@ -110,27 +104,9 @@ The approximate join is a partitioned hash join: it co-partitions both inputs an
 \input{exact-join}
 
 % the three modes share the distance computation and differ only in the reduction
-In the exact join, all three modes compute the distance between every probe row and every corpus row, and they differ only in the reduction applied to the resulting $mn$ pairs.
-Per-row keeps $k$ pairs for each probe row, global keeps $k$ pairs overall, and threshold keeps every pair within $\varepsilon$.
-Sirius cannot apply this reduction to all $mn$ pairs at once because by its design it partitions both relations into batches during the scan.
-So Sirius computes one pair of a probe batch and a corpus batch at a time and the reduction therefore has two levels: a local reduction within each batch pair, and a global reduction that combines local results into the final answer (Figure~\ref{fig:exact-join}).
-In every mode, Sirius gathers output columns only for pairs that survive the local reduction and never for the full set of pairs.
-
-\paragraph{Per-row}
-Per-row returns the $k$ nearest corpus rows for each probe row.
-Within a batch pair, the local reduction keeps a list of $k$ nearest neighbors in that corpus batch for each probe row.
-The global reduction then merges, for each probe row, one list of $k$ candidates per corpus batch into the final $k$.
-With $q$ corpus batches, the merge reads at most $mkq$ candidates instead of $mn$ pairs, and the output has exactly $k$ rows per probe row, or $n$ rows when the corpus has fewer than $k$.
-
-\paragraph{Global}
-Global returns the $k$ nearest pairs across the whole join.
-Within a batch pair, the local reduction runs the per-row step and keeps the $k$ nearest pairs in that batch pair.
-The global reduction is then an ordinary relational top-$N$ over at most $k$ candidates per batch pair.
-Sirius runs this step with the engine's existing top-$N$ operators.
-
-\paragraph{Threshold}
-Threshold returns every pair whose distance falls within a radius $\varepsilon$.
-Within a batch pair, the local reduction keeps every pair within $\varepsilon$.
-Whether a pair survives depends only on its own distance, so the global reduction is the union of the local results.
-The output size ranges from zero to $mn$ and depends on the data and on $\varepsilon$.
+Both joins compute distances between probe rows and build rows and then apply a \emph{reduction}, which keeps only the pairs the mode asks for: $k$ per probe row for per-row top-$k$, $k$ overall for global top-$k$, and every pair within $\varepsilon$ for threshold (Section~\ref{subsec:similarity-join}).
+The modes differ only in this reduction.
+Sirius partitions both relations into batches during the scan and joins one probe batch with one build batch at a time, so the reduction has two levels (Figure~\ref{fig:exact-join}): a \emph{local} reduction keeps the mode's answer within each batch pair, and a \emph{global} reduction combines the local results into the final answer.
+For per-row top-$k$, the global reduction merges each probe row's $k$ candidates from every build batch into its final $k$; for global top-$k$, it is the engine's ordinary top-$N$ over the local results; for threshold, it is the union of the local results.
+In every mode, Sirius gathers output columns only for pairs that survive the local reduction and never for all $mn$ pairs.
 

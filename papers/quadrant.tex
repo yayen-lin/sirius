@@ -15,7 +15,7 @@
         flow/.style={-{Latex[length=2.2mm]}, thick, black!55},
     ]
 
-        % columns: relational, vector; rows: OLTP, OLAP
+        % columns: conventional, vector; rows: OLTP-shape, OLAP-shape
         \node[cell=10] (r1) at (0,0)     {Index search};
         \node[cell=36] (r2) at (0,-1.6)  {Join};
         \node[cell=24] (v1) at (3.6,0)   {Vector search};
@@ -28,14 +28,14 @@
         \draw[flow] (r2) -- (v2);
 
         % column axis (x)
-        \node[ax, anchor=south] at ([yshift=3pt]r1.north) {Relational};
+        \node[ax, anchor=south] at ([yshift=3pt]r1.north) {Conventional};
         \node[ax, anchor=south] at ([yshift=3pt]v1.north) {Vector};
 
         % row axis (y)
-        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r1.west) {OLTP};
-        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r2.west) {OLAP};
+        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r1.west) {OLTP-shape};
+        \node[ax, anchor=east, inner xsep=0pt] at ([xshift=-6pt]r2.west) {OLAP-shape};
     \end{tikzpicture}
     \captionsetup{textfont=normalfont}
-    \caption{Search and join over relational and vector data.}
+    \caption{Search and join over conventional and vector data.}
     \label{fig:quadrant}
 \end{figure}

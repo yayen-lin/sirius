@@ -32,7 +32,6 @@
     \begin{tikzpicture}[
         font=\scriptsize\sffamily,
         panel/.style={fill=black!5, draw=black!20, rounded corners=4pt},
-        ptitle/.style={anchor=west, font=\small\sffamily\bfseries},
         head/.style={align=center},
         flow/.style={-{Latex[length=1.6mm]}, black!70, line width=0.6pt},
         sel/.style={draw=black!60, fill=white, rounded corners=2pt, minimum width=1.55cm,
@@ -43,11 +42,10 @@
     ]
 
         % ---------- input tables, each logically partitioned into batches ----------
-        \draw[panel] (0,0.3) rectangle (4.5,4.55);
-        \node[ptitle] at (0.1,4.3) {\faTable~Tables in batches};
+        \draw[panel] (0,0.3) rectangle (4.5,4.15);
 
         \node[anchor=west] at (0.2,3.5) {$R$ (probe)};
-        \node[anchor=west] at (0.2,2.1) {$S$ (corpus)};
+        \node[anchor=west] at (0.2,2.1) {$S$ (build)};
         \draw[vjR!80!black, rounded corners=2pt] (0.15,2.72) rectangle (4.05,3.18);
         \draw[vjS!80!black, rounded corners=2pt] (0.15,1.32) rectangle (4.05,1.78);
         % the pair of the zoomed task is highlighted
@@ -64,8 +62,7 @@
         \draw[flow] (4.55,2.1) -- (5.25,2.1);
 
         % ---------- batch pairs on the GPU ----------
-        \draw[panel] (5.3,0.3) rectangle (17.55,4.55);
-        \node[ptitle] at (5.4,4.3) {\faMicrochip~GPU: {\mdseries up to $T$ batch pairs in parallel}};
+        \draw[panel] (5.3,0.3) rectangle (17.55,4.15);
 
         % vertical lines between steps
         \foreach \x in {6.75,9.25,13.05}
@@ -75,8 +72,8 @@
         \foreach \hx/\htitle/\hsub in {
             6.02/{\textbf{Input}}/{one pair},
             8.0/{\textbf{Step 1}: Distance comp.}/{matrix multiplication},
-            11.15/{\textbf{Step 2a}: Local reduction}/{within a pair},
-            15.3/{\textbf{Step 2b}: Global reduction}/{across pairs}} {
+            11.15/{\textbf{Step 2}: Local reduction}/{within a pair},
+            15.3/{\textbf{Step 3}: Global reduction}/{across pairs}} {
             \node[anchor=base] at (\hx,3.85) {\htitle};
             \node[anchor=base, sub] at (\hx,3.6) {\hsub};}
 
@@ -115,7 +112,7 @@
         \draw[flow] (sj.east) -- (7.4,2.5);
         \draw[flow] (ri.east) -- (7.1,1.8);
 
-        % ---------- step 2a: selection ----------
+        % ---------- step 2: selection ----------
         \node[sel] (topk) at (10.15,2.9) {top-$k$\\select};
         \node[sel] (eps)  at (10.15,0.9) {$\varepsilon$\\filter};
         \draw[flow] ([xshift=0.22cm]tile.east) -- (topk.west);
@@ -133,7 +130,7 @@
         \draw[flow] (prmini.south) -- (glmini.north) node[midway, left, sub] {keep $k$ best};
         \draw[flow] (eps.east) -- (thmini.west);
 
-        % ---------- step 2b: global reduction ----------
+        % ---------- step 3: global reduction ----------
         \node[op] (prop) at (14.45,2.9)
             {top-$k$ merge\\{\tiny merge $q$ partials per $R_i$}};
         \node[op] (glop) at (14.45,1.9)

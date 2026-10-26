@@ -5,9 +5,7 @@
 
 %\yxy{need a short transition parargaph}
 
-A vector join compares two columns of embeddings.
-It generalizes vector search from one query vector to a whole relation, and it is the high-dimensional form of the similarity join, which databases have studied for decades on low-dimensional data.
-We review embeddings, these two operations, and how GPUs run them today.
+This section describes background on embeddings, vector search, similarity joins, and GPU-accelerated data processing.
 
 \subsection{Embeddings and Vectors}\label{subsec:embeddings-and-vectors}
 
@@ -31,22 +29,14 @@ Either way, the embeddings reach the execution engine as a column of fixed-lengt
 
 % what a vector search is, and how it is written in SQL
 A vector search returns the top-$k$ nearest neighbors of one query vector from a dataset under a distance metric.
-In SQL it is an ordering by distance with a limit; the DuckDB query below returns the five documents closest to a query embedding \texttt{\$q}:
-
-\begin{lstlisting}[style=vjcolor, basicstyle=\ttfamily\small, aboveskip=\medskipamount, belowskip=\medskipamount]
--- docs(id, title, emb FLOAT[768])
-SELECT id, title
-FROM docs
-ORDER BY array_cosine_distance(emb, $q)
-LIMIT 5;
-\end{lstlisting}
+In SQL it is an ordering by distance with a limit.
 
 % exact vs approximate search
 An \textit{exact} search compares the query with every vector and returns the true neighbors, at a cost linear in the dataset size.
-An approximate nearest neighbor (ANN) search trades some recall for speed by comparing only the candidates an index selects, most commonly from clusters (IVF~\cite{JegouPQ11}) or a proximity graph (HNSW~\cite{MalkovYashunin20}).
+An approximate nearest neighbor (ANN) search trades some recall for speed by comparing only the candidates an index selects, most commonly from clusters (IVF~\cite{JegouPQ11}) or a proximity graph (HNSW~\cite{MalkovYashunin20}, CAGRA~\cite{OotomoCAGRA24}).
 
 % integrated into relational databases, and the step from search to join
-Relational databases add vector search through a vector type, distance functions, and an ANN index, so the optimizer can answer the query above with an index scan and compose it with filters and joins.
+Relational databases add vector search through a vector type, distance functions, and an ANN index, so the optimizer can answer such a query with an index scan and compose it with filters and joins.
 Stonebraker and Pavlo cite this integration as evidence that vector search is a feature of relational engines rather than a new architecture~\cite{StonebrakerPavloAround24}, and Zhang et al.\ find no inherent barrier to efficient vector search in PostgreSQL~\cite{ZhangPgLimits24}.
 The syntax still varies, from \texttt{ORDER BY} with a limit~\cite{PgvectorRepo, DuckDBVSS, OracleAIVectorSearch} to a \texttt{VECTOR\_SEARCH} table function~\cite{BigQueryVectorSearchFn, SQLServerVectorSearchFn, DatabricksVectorSearchFn26}, and a vector extension is under way for the SQL standard~\cite{EisentrautSQL202y25}.
 In all these systems the query side is one vector or a batch that a client submits; when it is instead a relation, stored or produced by other operators, the search becomes a similarity join.
@@ -54,12 +44,12 @@ In all these systems the query side is one vector or a batch that a client submi
 \subsection{Similarity Join}\label{subsec:similarity-join}
 
 % what a similarity join is & its three forms
-Given a relation $R$ of $m$ probe vectors, a relation $S$ of $n$ corpus vectors, each of dimension $d$, and a distance function $\delta$, a similarity join returns the pairs $(r, s) \in R \times S$ that satisfy a similarity condition.
-The condition takes one of three forms, each studied under its own name:
+Given a probe relation $R$ of $m$ vectors and a build relation $S$ of $n$ vectors, each of dimension $d$, and a distance function $\delta$, a similarity join returns the pairs $(r, s) \in R \times S$ that satisfy a similarity condition.
+Prior work studies three forms of the condition, and we name our join modes after them:
 \begin{itemize}
-    \item \emph{Per-row top-$k$}: for each $r \in R$, the $k$ rows of $S$ nearest to $r$, known as the \emph{kNN join}~\cite{BohmKrebsKNNJoin04}; for example, batch retrieval and hard-negative mining~\cite{HuangFBRetrieval20, XiongANCE21}.
-    \item \emph{Global top-$k$}: the $k$ pairs in $R \times S$ with the smallest distance, known as the \emph{$k$ closest pairs} or \emph{distance join}~\cite{HjaltasonSametDistJoin98, CorralClosestPair00}; for example, finding the city nearest to any river.
-    \item \emph{Threshold}: every pair with $\delta(r, s) \le \varepsilon$, known as the \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98}; for example, semantic deduplication~\cite{AbbasSemDeDup23} and entity resolution~\cite{SantanaEMJoin25}.
+    \item \emph{kNN join}~\cite{BohmKrebsKNNJoin04} (\emph{per-row top-$k$}): for each $r \in R$, the $k$ rows of $S$ nearest to $r$; for example, batch retrieval and hard-negative mining~\cite{HuangFBRetrieval20, XiongANCE21}.
+    \item \emph{$k$ closest pairs} or \emph{distance join}~\cite{HjaltasonSametDistJoin98, CorralClosestPair00} (\emph{global top-$k$}): the $k$ pairs in $R \times S$ with the smallest distance; for example, finding the city nearest to any river.
+    \item \emph{$\varepsilon$-join}~\cite{ShimSimJoin97, KoudasSevcik98} (\emph{threshold}): every pair with $\delta(r, s) \le \varepsilon$; for example, semantic deduplication~\cite{AbbasSemDeDup23} and entity resolution~\cite{SantanaEMJoin25}.
 \end{itemize}
 
 % historical view, stages 1 and 2: algorithms, then database systems and clusters, all low-dimensional
@@ -77,15 +67,11 @@ Recent algorithms target approximate joins at this scale~\cite{XieSimJoin25, Che
 
 % GPU SQL engines: analytics is bandwidth-bound, and GPU-native engines outperform CPU engines
 Analytical queries scan large inputs and are typically bound by memory bandwidth, and a GPU offers several times the memory bandwidth of a CPU\@.
-GPU SQL engines~\cite{HeavyDB, Kinetica, AramburuTheseus25, Yogatama26} run analytical queries on the GPU, and Yogatama et al.\ show that a GPU-native SQL engine outperforms state-of-the-art CPU engines on TPC-H and ClickBench, with higher cost efficiency~\cite{Yogatama26, SiriusClickBench25}.
+GPU SQL engines~\cite{HeavyDB, Kinetica, AramburuTheseus25, HeTQP22, Yogatama26} run analytical queries on the GPU.
+Microsoft's TQP compiles SQL into tensor programs and runs queries up to 10$\times$ faster than specialized CPU and GPU systems~\cite{HeTQP22}, and Sirius shows that a GPU-native engine can outperform state-of-the-art CPU engines on TPC-H and ClickBench with higher cost efficiency~\cite{Yogatama26, SiriusClickBench25}.
 
 % vector search on the GPU today
 GPU vector search comes mainly from libraries that take a batch of queries per call: FAISS~\cite{JohnsonFaissGPU21} and NVIDIA cuVS~\cite{NvidiaCuVS26} with its graph index CAGRA~\cite{OotomoCAGRA24}, which FAISS now uses as its GPU backend~\cite{MetaFaissCuVS25}.
-Research has extended GPU search to new indexes, larger-than-memory data, CPU--GPU cooperation, and ray-tracing cores~\cite{ZhaoSONG19, GrohGGNN22, KarthikBANG24, ZhangRummy24, TianFusionANNS25, LiuJuno24}, while commercial systems mostly build indexes on the GPU and search on the CPU~\cite{ElasticGPUIndexing, OpenSearchGPU25, SolrCuVS, OracleVectorIndexService}, except Milvus~\cite{MilvusGPUIndex} and Kinetica~\cite{KineticaVectorSearch}.
-
-% similarity joins on the GPU are standalone algorithms, and no SQL engine runs the join on the GPU
-Prior GPU similarity joins are standalone algorithms rather than query operators, built on space-filling curves~\cite{LiebermanGPUSimJoin08} or a grid index~\cite{GowanlockGPUSelfJoin19}.
-The SQL engines and algorithms of Section~\ref{subsec:similarity-join} run the join on the CPU, and to our knowledge no SQL engine runs it on the GPU.
-The rest of this paper shows why and how to run it there as an operator inside a SQL engine.
+Research has extended GPU search to new indexes, larger-than-memory data, CPU--GPU cooperation, and ray-tracing cores~\cite{ZhaoSONG19, GrohGGNN22, KarthikBANG24, ZhangRummy24, TianFusionANNS25, LiuJuno24}, while commercial systems mostly build indexes on the GPU and search on the CPU~\cite{ElasticGPUIndexing, OpenSearchGPU25, SolrCuVS, OracleVectorIndexService}; Milvus~\cite{MilvusGPUIndex} and Kinetica~\cite{KineticaVectorSearch} also search on the GPU.
 
 %\yxy{We probably can add a Sec 2.4 to talk about background in GPU-accelerated data processing, both SQL and vector search, and point out that there is no GPU-accelerated similarity join.}

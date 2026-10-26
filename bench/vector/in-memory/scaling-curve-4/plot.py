@@ -84,7 +84,7 @@ if __name__ == "__main__":
     log_axis(ax.yaxis)
     ax.yaxis.set_major_formatter(FuncFormatter(human))
     ax.set_xlabel(r"Probe rows ($m$)")
-    ax.set_ylabel("Throughput")
+    ax.set_ylabel("Throughput (distance computations/s)")
 
     handles = engine_handles(ENGINES)
     if any_to:

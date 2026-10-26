@@ -11,6 +11,7 @@
     \label{tab:vector-join-api}
 
     % column headers
+    \vjrule{\heavyrulewidth}
     \makebox[1.2em]{}%
     \begin{minipage}{\dimexpr\textwidth-1.2em\relax}
         \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=0pt, raster after skip=0pt]
@@ -19,42 +20,41 @@
             \begin{tcolorbox}[blankest, halign=center]\vjhead{vjthresh}{Threshold}\end{tcolorbox}
         \end{tcbraster}
     \end{minipage}
+    \vjrule{\lightrulewidth}
 
     % row 1: table function
     \vjrow{TVF}%
     \begin{minipage}[c]{\dimexpr\textwidth-1.2em\relax}
-        \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=1mm, raster after skip=0pt]
+        \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=0pt, raster after skip=0pt]
             \begin{tcolorbox}[vjcard, vjmode=vjperrow]
                 \begin{lstlisting}[style=vj,label={lst:tvf-per-row}]
 SELECT * FROM sirius_knn_join(
   'R', 'emb', 'S', 'emb',
-  @join_mode => 'per-row', k => 5@,
-  metric => 'l2');
+  @join_mode => 'per-row', k => 5@);
 \end{lstlisting}
             \end{tcolorbox}
             \begin{tcolorbox}[vjcard, vjmode=vjglobal]
                 \begin{lstlisting}[style=vj,label={lst:tvf-global}]
 SELECT * FROM sirius_knn_join(
   'R', 'emb', 'S', 'emb',
-  @join_mode => 'global', k => 5@,
-  metric => 'l2');
+  @join_mode => 'global', k => 5@);
 \end{lstlisting}
             \end{tcolorbox}
             \begin{tcolorbox}[vjcard, vjmode=vjthresh]
                 \begin{lstlisting}[style=vj,label={lst:tvf-threshold}]
 SELECT * FROM sirius_knn_join(
   'R', 'emb', 'S', 'emb',
-  @join_mode => 'threshold', eps => 5@,
-  metric => 'l2');
+  @join_mode => 'threshold', eps => 5@);
 \end{lstlisting}
             \end{tcolorbox}
         \end{tcbraster}
     \end{minipage}
+    \vjrule{\lightrulewidth}
 
     % row 2: native SQL
     \vjrow{Native SQL}%
     \begin{minipage}[c]{\dimexpr\textwidth-1.2em\relax}
-        \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=1mm, raster after skip=0pt]
+        \begin{tcbraster}[raster columns=3, raster equal height=rows, raster before skip=0pt, raster after skip=0pt]
             \begin{tcolorbox}[vjcard, vjmode=vjperrow]
                 \begin{lstlisting}[style=vj,label={lst:sql-per-row}]
 SELECT R.id, nn.id, nn.dist
@@ -84,4 +84,5 @@ FROM R JOIN S
             \end{tcolorbox}
         \end{tcbraster}
     \end{minipage}
+    \vjrule{\heavyrulewidth}
 \end{table*}
