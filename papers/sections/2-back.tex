@@ -14,7 +14,7 @@ A vector embedding is a fixed-length array of numbers that a machine learning mo
 Modern embedding models produce vectors with hundreds to thousands of dimensions.
 The model is trained so that geometric proximity in the embedding space reflects semantic similarity: similar inputs map to nearby vectors, and unrelated inputs map farther apart.
 Comparing two objects semantically therefore reduces to computing a distance or similarity score between their vectors, most commonly Euclidean (L2) distance, cosine similarity, or inner product.
-All three can be computed from dot products and vector norms (Section~\ref{subsec:why-gpu}).
+All three can be computed from dot products and vector norms (Section~\ref{subsec:exact-algo}).
 We use the terms \emph{embedding} and \emph{vector} interchangeably.
 
 %\yxy{we need space to need to shrink. generally the writing can be more concise. For the paragraph below, maybe don't list the system names to save space. }
@@ -69,8 +69,10 @@ Recent algorithms target approximate joins at this scale~\cite{XieSimJoin25, Che
 
 % GPU SQL engines: analytics is bandwidth-bound, and GPU-native engines outperform CPU engines
 Analytical queries scan large inputs and are typically bound by memory bandwidth, and a GPU offers several times the memory bandwidth of a CPU\@.
-GPU SQL engines~\cite{HeavyDB, Kinetica, AramburuTheseus25, HeTQP22, Yogatama26} run analytical queries on the GPU.
-Microsoft's TQP compiles SQL into tensor programs and runs queries up to 10$\times$ faster than specialized CPU and GPU systems~\cite{HeTQP22}, and Sirius shows that a GPU-native engine can outperform state-of-the-art CPU engines on TPC-H and ClickBench with higher cost efficiency~\cite{Yogatama26, SiriusClickBench25}.
+GPU SQL engines~\cite{HeavyDB, Kinetica, AramburuTheseus25} run analytical queries on the GPU.
+Sirius shows that a GPU-native engine can outperform state-of-the-art CPU engines on TPC-H and ClickBench with higher cost efficiency~\cite{Yogatama26, SiriusClickBench25}.
+Microsoft's TQP compiles SQL into tensor programs~\cite{HeTQP22}, and its successor CoddSpeed brings GPU execution to a commercial cloud data warehouse~\cite{InterlandiCoddSpeed26}.
+AI workloads have also made GPUs plentiful in data centers, which makes them a natural target for analytics~\cite{InterlandiCoddSpeed26}.
 
 % vector search and join on the GPU today
 GPU vector search comes mainly from libraries that take a batch of queries per call: FAISS~\cite{JohnsonFaissGPU21} and NVIDIA cuVS~\cite{NvidiaCuVS26} with its graph index CAGRA~\cite{OotomoCAGRA24}, which FAISS now uses as its GPU backend~\cite{MetaFaissCuVS25}.
